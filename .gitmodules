@@ -1,0 +1,6 @@
+[submodule "external/OpenXR-SDK"]
+	path = external/OpenXR-SDK
+	url = https://github.com/KhronosGroup/OpenXR-SDK
+[submodule "external/volk"]
+	path = external/volk
+	url = https://github.com/zeux/volk

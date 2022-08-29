@@ -1,7 +1,7 @@
 # Config inspired by https://github.com/krux02/minimal_cmake_example
 
 cmake_minimum_required(VERSION 3.16)
-project(railguard)
+project(xr_engine)
 
 ##################################################################
 ###                          SETTINGS                          ###
@@ -44,12 +44,12 @@ enable_testing()
 ##################################################################
 
 # Add source files for main lib
-set(railguard_lib_sources
-
+set(xr_engine_lib_sources
+        src/main.cpp
         )
 
 # Add header directories for main lib
-set(railguard_lib_header_dir
+set(xr_engine_lib_header_dir
         include
         )
 
@@ -149,9 +149,9 @@ endif ()
 ##################################################################
 
 # Create main lib
-add_library(railguard_lib STATIC ${railguard_lib_sources})
-target_sources(railguard_lib PRIVATE ${railguard_lib_sources})
-target_include_directories(railguard_lib PUBLIC ${railguard_lib_header_dir})
+add_library(xr_engine_lib STATIC ${xr_engine_lib_sources})
+target_sources(xr_engine_lib PRIVATE ${xr_engine_lib_sources})
+target_include_directories(xr_engine_lib PUBLIC ${xr_engine_lib_header_dir})
 
 ##################################################################
 ###                         DEPENDENCIES                       ###
@@ -169,20 +169,26 @@ add_subdirectory(external)
 if (${interactive} STREQUAL "0")
     # Link pthread on linux
     if (UNIX)
-        target_link_libraries(railguard_lib PUBLIC pthread)
+        target_link_libraries(xr_engine_lib PUBLIC pthread)
     endif ()
 endif ()
 
 if (DEFINED RENDERER_VULKAN)
-    target_link_libraries(railguard_lib PUBLIC
+    target_link_libraries(xr_engine_lib PUBLIC
             Vulkan::Vulkan
             volk
             )
 endif ()
 
 if (DEFINED WINDOW_SDL2)
-    target_link_libraries(railguard_lib PUBLIC
+    target_link_libraries(xr_engine_lib PUBLIC
             sdl2
+            )
+endif ()
+
+if (DEFINED XR_OPENXR)
+    target_link_libraries(xr_engine_lib PUBLIC
+            openxr
             )
 endif ()
 
@@ -220,7 +226,7 @@ macro(add_unit_test)
             )
 
     # Link project lib and testing framework
-    target_link_libraries(${TEST_NAME} railguard_lib testing_framework)
+    target_link_libraries(${TEST_NAME} xr_engine_lib testing_framework)
 
     # Register test
     add_test(NAME ${TEST_NAME}
@@ -279,9 +285,9 @@ if (DEFINED RENDERER_VULKAN)
     # Error if not found
     if (glsl_validator STREQUAL "")
         message(FATAL_ERROR "Could not find glslangValidator")
-    else()
+    else ()
         message(STATUS "Using glslangValidator: ${glsl_validator}")
-    endif()
+    endif ()
 
     # Find shader files
     file(GLOB_RECURSE glsl_source_files
@@ -291,7 +297,7 @@ if (DEFINED RENDERER_VULKAN)
             )
 
     # Iterate each shader
-    foreach(glsl ${glsl_source_files})
+    foreach (glsl ${glsl_source_files})
         get_filename_component(file_name ${glsl} NAME)
 
         # Get relative path of shader in shaders directory
@@ -310,9 +316,9 @@ if (DEFINED RENDERER_VULKAN)
                 COMMAND ${glsl_validator} -V ${glsl} -o ${spirv}
                 DEPENDS ${glsl})
         list(APPEND spirv_binary_files ${spirv})
-    endforeach(glsl)
+    endforeach (glsl)
 
     # Link it to the main lib
     add_custom_target(shaders DEPENDS ${spirv_binary_files})
-    add_dependencies(railguard_lib shaders)
-endif()
+    add_dependencies(xr_engine_lib shaders)
+endif ()
