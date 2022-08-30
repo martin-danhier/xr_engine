@@ -39,6 +39,11 @@ set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders")
 # Enable tests
 enable_testing()
 
+# Set unused parameters as warnings instead of errors
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-error=unused-parameter)
+endif ()
+
 ##################################################################
 ###                          SOURCES                           ###
 ##################################################################

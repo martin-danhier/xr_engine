@@ -5,6 +5,7 @@
 
 # Build directories
 cmake-build-*
+build*
 
 # Compiled shader modules
 *.spv

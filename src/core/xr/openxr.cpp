@@ -139,6 +139,44 @@ namespace xre
             return valid;
         }
 
+        bool check_layer_support(const std::vector<const char *> &desired_layers)
+        {
+            // Get the number of available API layers
+            uint32_t available_layers_count = 0;
+            xr_check(xrEnumerateApiLayerProperties(0, &available_layers_count, nullptr));
+            // Create an array with enough room and fetch the available layers
+            std::vector<XrApiLayerProperties> available_layers(available_layers_count, {XR_TYPE_API_LAYER_PROPERTIES});
+            xr_check(xrEnumerateApiLayerProperties(available_layers_count, &available_layers_count, available_layers.data()));
+
+            // For each desired layer, rg_renderer_check if it is available
+            bool valid = true;
+            for (const auto &desired_layer : desired_layers)
+            {
+                bool       found = false;
+                const auto layer = std::string(desired_layer);
+
+                // Search available layers until the desired one is found or not
+                for (const auto &available_layer : available_layers)
+                {
+                    if (layer == std::string(available_layer.layerName))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                // Stop looking if nothing was found
+                if (!found)
+                {
+                    valid = false;
+                    std::cerr << "[Error] The layer \"" << layer << "\" is not available.\n";
+                    break;
+                }
+            }
+
+            return valid;
+        }
+
         /**
          * Callback for the vulkan debug messenger
          * @param message_severity Severity of the message
@@ -220,13 +258,24 @@ namespace xre
 
             check(check_xr_instance_extension_support(required_extensions), "Not all required OpenXR extensions are supported.");
 
+#ifdef USE_OPENXR_DEBUG_UTILS
+            std::vector<const char *> enabled_layers;
+            enabled_layers.push_back("XR_APILAYER_LUNARG_core_validation");
+            check(check_layer_support(enabled_layers), "OpenXR validation layers requested, but not available.");
+#endif
+
             XrInstanceCreateInfo instance_create_info {
                 .type            = XR_TYPE_INSTANCE_CREATE_INFO,
                 .next            = XR_NULL_HANDLE,
                 .applicationInfo = xr_app_info,
                 // Layers
+#ifdef USE_OPENXR_DEBUG_UTILS
+                .enabledApiLayerCount = static_cast<uint32_t>(enabled_layers.size()),
+                .enabledApiLayerNames = enabled_layers.data(),
+#else
                 .enabledApiLayerCount = 0,
                 .enabledApiLayerNames = XR_NULL_HANDLE,
+#endif
                 // Extensions
                 .enabledExtensionCount = static_cast<uint32_t>(required_extensions.size()),
                 .enabledExtensionNames = required_extensions.data(),
@@ -281,7 +330,7 @@ namespace xre
             XrDebugUtilsMessengerCreateInfoEXT debug_messenger_create_info = {
                 // Struct info
                 .type = XR_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-                .next = VK_NULL_HANDLE,
+                .next = XR_NULL_HANDLE,
                 // Message settings
                 .messageSeverities = XR_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | XR_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
                 .messageTypes      = XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | XR_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT

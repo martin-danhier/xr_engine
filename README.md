@@ -15,7 +15,17 @@ Ideas for better name are welcome.
     - If you forgot the flag, you can run `git submodule update --init` instead.
 2. Install Vulkan SDK. Make sure to have the latest version, since vk_mem_alloc is often up-to-date.
 3. Install SDL2
-5. Install a C++ compiler (on Linux, clang and ninja are recommended).
+4. Install a C++ compiler (on Linux, clang and ninja are recommended).
+
+## Enable OpenXR validation layers
+
+To enable validation layers, add the following environment variable:
+
+``XR_API_LAYER_PATH=<build_directory>/external/OpenXR-SDK-Source/src/api_layers``
+
+where ``<build_directory>`` is replaced by its actual path.
+
+Also, make sure to compile in ``Debug`` mode.
 
 ## Enable GDB pretty print
 
