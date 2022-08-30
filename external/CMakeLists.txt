@@ -105,3 +105,16 @@ if (DEFINED XR_OPENXR)
     target_include_directories(openxr INTERFACE OpenXR-SDK/include)
     target_link_libraries(openxr INTERFACE openxr_loader)
 endif()
+
+##################################################################
+###                       VULKAN-MEM-ALLOC                     ###
+##################################################################
+
+if (DEFINED RENDERER_VULKAN)
+    add_library(vma STATIC)
+    target_sources(vma PRIVATE
+            vma_implementation.cpp
+            )
+    target_include_directories(vma SYSTEM PUBLIC vma/include)
+    target_link_libraries(vma PUBLIC Vulkan::Vulkan $<$<BOOL:UNIX>:${CMAKE_DL_LIBS}>)
+endif ()

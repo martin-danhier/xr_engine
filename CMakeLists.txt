@@ -45,7 +45,12 @@ enable_testing()
 
 # Add source files for main lib
 set(xr_engine_lib_sources
-        src/main.cpp
+        src/core/engine.cpp
+        src/core/xr/openxr.cpp
+        src/core/global.cpp
+        src/core/renderer/renderer_vulkan.cpp
+        src/core/window/window_sdl2.cpp
+        src/utils/global_utils.cpp
         )
 
 # Add header directories for main lib
@@ -90,6 +95,28 @@ if (DEFINED RENDERER_VULKAN)
                 USE_VK_VALIDATION_LAYERS
         )
     endif ()
+endif ()
+
+# OpenXR specific
+if (DEFINED XR_OPENXR)
+    if (DEFINED RENDERER_VULKAN)
+        add_compile_definitions(
+                XR_USE_GRAPHICS_API_VULKAN
+        )
+    endif ()
+
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_compile_definitions(
+                USE_OPENXR_DEBUG_UTILS
+        )
+    endif ()
+endif ()
+
+# SDL2 specific
+if (DEFINED WINDOW_SDL2)
+    add_compile_definitions(
+            SDL_MAIN_HANDLED
+    )
 endif ()
 
 # On a CI, override the value of interactive with 0
@@ -177,6 +204,7 @@ if (DEFINED RENDERER_VULKAN)
     target_link_libraries(xr_engine_lib PUBLIC
             Vulkan::Vulkan
             volk
+            vma
             )
 endif ()
 
