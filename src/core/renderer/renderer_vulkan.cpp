@@ -21,8 +21,6 @@
 #error "Vulkan SDK 1.3 is required"
 #endif
 
-#define VULKAN_API_VERSION VK_API_VERSION_1_0
-
 namespace xre
 {
     // --=== Structs ===--
@@ -148,6 +146,13 @@ namespace xre
                 case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO Relaxed";
                 default: return std::to_string(present_mode);
             }
+        }
+
+        Version make_version(const int &version)
+        {
+            return Version {static_cast<uint8_t>(VK_API_VERSION_MAJOR(version)),
+                            static_cast<uint8_t>(VK_API_VERSION_MINOR(version)),
+                            static_cast<uint16_t>(VK_API_VERSION_PATCH(version))};
         }
 
         void vk_check(VkResult result, const std::string &error_message = "")
@@ -632,13 +637,9 @@ namespace xre
 
         // Get requirements
         auto requirements = m_data->xr_system.get_vulkan_compatibility();
-        auto version = VK_MAKE_VERSION(requirements.max_version.major, requirements.max_version.minor, 0);
-        if (version > VULKAN_API_VERSION) {
-            throw std::runtime_error("Vulkan version is too old");
-        }
+        auto vulkan_version      = VK_MAKE_VERSION(requirements.max_version.major, requirements.max_version.minor, 0);
 
-        std::cout << "Using Vulkan backend, version " << VK_API_VERSION_MAJOR(VULKAN_API_VERSION) << "."
-                  << VK_API_VERSION_MINOR(VULKAN_API_VERSION) << "\n";
+        std::cout << "Using Vulkan backend, version " << requirements.max_version << "\n";
 
         // Initialize volk
         vk_check(volkInitialize(), "Couldn't initialize Volk.");
@@ -686,7 +687,7 @@ namespace xre
                 // Engine infos
                 .pEngineName   = ENGINE_NAME,
                 .engineVersion = VK_MAKE_VERSION(ENGINE_VERSION.major, ENGINE_VERSION.minor, ENGINE_VERSION.patch),
-                .apiVersion    = VULKAN_API_VERSION,
+                .apiVersion    = vulkan_version,
             };
 
             VkInstanceCreateInfo instanceCreateInfo {
@@ -861,7 +862,8 @@ namespace xre
             }
 
             // Create the logical device
-            VkPhysicalDeviceFeatures features = {};
+            VkPhysicalDeviceFeatures features      = {};
+            features.shaderStorageImageMultisample = VK_TRUE;
 
             VkDeviceCreateInfo device_create_info = {
                 // Struct infos
@@ -914,6 +916,9 @@ namespace xre
 
         // Tell XR which queues we will use
         m_data->xr_system.register_graphics_queue(m_data->graphics_queue.family_index, 0);
+
+        // Signal XR that it can finish the initialization
+        m_data->xr_system.finish_setup();
     }
 
     Renderer::Renderer(const Renderer &other) : m_data(other.m_data)
@@ -964,6 +969,13 @@ namespace xre
 
             if (m_data->reference_count == 0)
             {
+                // Wait
+                vk_check(vkDeviceWaitIdle(m_data->device), "Failed to wait for device to become idle");
+
+                // Destroy XR system, so that it releases its Vulkan resources
+                m_data->xr_system.~XrSystem();
+                m_data->xr_system = {};
+
                 // Destroy allocator
                 m_data->allocator.~Allocator();
 

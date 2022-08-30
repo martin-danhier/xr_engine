@@ -45,10 +45,12 @@ namespace xre
 
         ~XrSystem();
 
-        void start_session();
 
       private:
         friend class Renderer;
+
+        void finish_setup();
+
 #ifdef RENDERER_VULKAN
 
         [[nodiscard]] VulkanCompatibility get_vulkan_compatibility() const;

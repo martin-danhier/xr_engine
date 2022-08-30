@@ -47,12 +47,13 @@ namespace xre
 #ifdef USE_OPENXR_DEBUG_UTILS
         XrDebugUtilsMessengerEXT debug_messenger = XR_NULL_HANDLE;
 #endif
-        XrSystemId system_id = XR_NULL_SYSTEM_ID;
-        XrSession  session   = XR_NULL_HANDLE;
+        XrSystemId system_id       = XR_NULL_SYSTEM_ID;
+        XrSession  session         = XR_NULL_HANDLE;
+        bool       session_running = false;
 
 #ifdef RENDERER_VULKAN
         // Data passed by the renderer required for the binding between OpenXR and Vulkan
-        XrGraphicsBindingVulkanKHR graphics_binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr};
+        XrGraphicsBindingVulkan2KHR graphics_binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr};
 #endif
     };
 
@@ -60,7 +61,6 @@ namespace xre
 
     namespace xr
     {
-
         std::string xr_result_to_string(XrResult result)
         {
             switch (result)
@@ -190,8 +190,7 @@ namespace xre
 
     XrSystem::XrSystem(const Settings &settings) : m_data(new Data)
     {
-        std::cout << "Using OpenXR, version " << XR_VERSION_MAJOR(XR_CURRENT_API_VERSION) << "."
-                  << XR_VERSION_MINOR(XR_CURRENT_API_VERSION) << "\n";
+        std::cout << "Using OpenXR, version " << make_version(XR_CURRENT_API_VERSION) << "\n";
 
         // === Create instance ===
         {
@@ -233,6 +232,15 @@ namespace xre
                 .enabledExtensionNames = required_extensions.data(),
             };
             xr_check(xrCreateInstance(&instance_create_info, &m_data->instance), "Failed to create instance");
+
+            // Print runtime name
+            XrInstanceProperties instance_properties {
+                .type = XR_TYPE_INSTANCE_PROPERTIES,
+            };
+            xr_check(xrGetInstanceProperties(m_data->instance, &instance_properties), "Failed to get instance properties");
+
+            std::cout << "Using runtime \"" << instance_properties.runtimeName << "\", version "
+                      << make_version(instance_properties.runtimeVersion) << "\n";
         }
 
         // === Load dynamic functions ===
@@ -359,7 +367,8 @@ namespace xre
 
             if (m_data->reference_count == 0)
             {
-                if (m_data->session != XR_NULL_HANDLE) {
+                if (m_data->session != XR_NULL_HANDLE)
+                {
                     xr_check(xrDestroySession(m_data->session), "Failed to destroy session");
                 }
 
@@ -381,7 +390,7 @@ namespace xre
         }
     }
 
-    void XrSystem::start_session()
+    void XrSystem::finish_setup()
     {
         // Create session
         {
@@ -395,7 +404,8 @@ namespace xre
 #endif
                 .systemId = m_data->system_id,
             };
-            xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session), "Failed to create session");
+            xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session),
+                     "Failed to create session. Is the headset plugged in?");
         }
     }
 
@@ -485,7 +495,6 @@ namespace xre
         m_data->graphics_binding.queueFamilyIndex = queue_family;
         m_data->graphics_binding.queueIndex       = queue_index;
     }
-
 #endif
 } // namespace xre
 
