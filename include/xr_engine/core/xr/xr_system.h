@@ -1,7 +1,18 @@
 #pragma once
 
-#include <vector>
 #include <string>
+#include <vector>
+
+#ifdef RENDERER_VULKAN
+#include <vulkan/vk_platform.h>
+typedef struct VkInstance_T       *VkInstance;
+typedef struct VkPhysicalDevice_T *VkPhysicalDevice;
+typedef struct VkDevice_T         *VkDevice;
+typedef void(VKAPI_PTR *PFN_vkVoidFunction)(void);
+typedef PFN_vkVoidFunction(VKAPI_PTR *PFN_vkGetInstanceProcAddr)(VkInstance instance, const char *pName);
+struct VkInstanceCreateInfo;
+struct VkDeviceCreateInfo;
+#endif
 
 namespace xre
 {
@@ -34,9 +45,22 @@ namespace xre
 
         ~XrSystem();
 
+        void start_session();
+
+      private:
+        friend class Renderer;
 #ifdef RENDERER_VULKAN
+
         [[nodiscard]] VulkanCompatibility get_vulkan_compatibility() const;
-        std::vector<std::string> get_required_vulkan_extensions(std::vector<const char *> &out_extensions) const;
+        int                               create_vulkan_instance(const VkInstanceCreateInfo &create_info,
+                                                                 PFN_vkGetInstanceProcAddr   vk_get_instance_proc_addr,
+                                                                 VkInstance                 &out_instance) const;
+        int                               create_vulkan_device(const VkDeviceCreateInfo &create_info,
+                                                               PFN_vkGetInstanceProcAddr vk_get_instance_proc_addr,
+                                                               VkDevice                 &out_device) const;
+
+        [[nodiscard]] VkPhysicalDevice get_vulkan_physical_device() const;
+        void                           register_graphics_queue(uint32_t queue_family, uint32_t queue_index) const;
 #endif
     };
 } // namespace xre

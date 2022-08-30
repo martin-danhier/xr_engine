@@ -29,10 +29,10 @@ PFN_xrDestroyDebugUtilsMessengerEXT xrDestroyDebugUtilsMessengerEXT = nullptr;
 #endif
 
 #ifdef RENDERER_VULKAN
-PFN_xrGetVulkanGraphicsRequirementsKHR xrGetVulkanGraphicsRequirementsKHR = nullptr;
-PFN_xrGetVulkanGraphicsDeviceKHR       xrGetVulkanGraphicsDeviceKHR       = nullptr;
-PFN_xrGetVulkanInstanceExtensionsKHR   xrGetVulkanInstanceExtensionsKHR   = nullptr;
-PFN_xrGetVulkanDeviceExtensionsKHR     xrGetVulkanDeviceExtensionsKHR     = nullptr;
+PFN_xrGetVulkanGraphicsRequirements2KHR xrGetVulkanGraphicsRequirements2KHR = nullptr;
+PFN_xrGetVulkanGraphicsDevice2KHR       xrGetVulkanGraphicsDevice2KHR       = nullptr;
+PFN_xrCreateVulkanInstanceKHR           xrCreateVulkanInstanceKHR           = nullptr;
+PFN_xrCreateVulkanDeviceKHR             xrCreateVulkanDeviceKHR             = nullptr;
 #endif
 
 namespace xre
@@ -49,6 +49,11 @@ namespace xre
 #endif
         XrSystemId system_id = XR_NULL_SYSTEM_ID;
         XrSession  session   = XR_NULL_HANDLE;
+
+#ifdef RENDERER_VULKAN
+        // Data passed by the renderer required for the binding between OpenXR and Vulkan
+        XrGraphicsBindingVulkanKHR graphics_binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr};
+#endif
     };
 
     // ---=== Utils ===---
@@ -199,7 +204,7 @@ namespace xre
             };
             // Copy title, using strcpy_s if available
 #ifdef _MSC_VER
-            check(strcpy_s(xr_app_info.applicationName, application_info.name) == 0, "Failed to copy application name");
+            check(strcpy_s(xr_app_info.applicationName, settings.application_info.name) == 0, "Failed to copy application name");
 #else
             check(strcpy(xr_app_info.applicationName, settings.application_info.name) != nullptr, "Failed to copy application name");
 #endif
@@ -210,7 +215,7 @@ namespace xre
                 XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
 #endif
 #ifdef RENDERER_VULKAN
-                XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
+                XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
 #endif
             };
 
@@ -244,21 +249,21 @@ namespace xre
 #endif
 #ifdef RENDERER_VULKAN
             xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanInstanceExtensionsKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanInstanceExtensionsKHR)),
-                     "Failed to load xrGetVulkanInstanceExtensionsKHR");
+                                           "xrGetVulkanGraphicsDevice2KHR",
+                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsDevice2KHR)),
+                     "Failed to load xrGetVulkanGraphicsDevice2KHR");
             xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanDeviceExtensionsKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanDeviceExtensionsKHR)),
-                     "Failed to load xrGetVulkanDeviceExtensionsKHR");
+                                           "xrCreateVulkanInstanceKHR",
+                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanInstanceKHR)),
+                     "Failed to load xrCreateVulkanInstanceKHR");
             xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanGraphicsDeviceKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsDeviceKHR)),
-                     "Failed to load xrGetVulkanGraphicsDeviceKHR");
+                                           "xrCreateVulkanDeviceKHR",
+                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanDeviceKHR)),
+                     "Failed to load xrCreateVulkanDeviceKHR");
             xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanGraphicsRequirementsKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsRequirementsKHR)),
-                     "Failed to load xrGetVulkanGraphicsRequirementsKHR");
+                                           "xrGetVulkanGraphicsRequirements2KHR",
+                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsRequirements2KHR)),
+                     "Failed to load xrGetVulkanGraphicsRequirements2KHR");
 #endif
         }
 
@@ -354,10 +359,20 @@ namespace xre
 
             if (m_data->reference_count == 0)
             {
+                if (m_data->session != XR_NULL_HANDLE) {
+                    xr_check(xrDestroySession(m_data->session), "Failed to destroy session");
+                }
+
 #ifdef USE_OPENXR_DEBUG_UTILS
-                xr_check(xrDestroyDebugUtilsMessengerEXT(m_data->debug_messenger), "Failed to destroy debug messenger");
+                if (m_data->debug_messenger != XR_NULL_HANDLE)
+                {
+                    xr_check(xrDestroyDebugUtilsMessengerEXT(m_data->debug_messenger), "Failed to destroy debug messenger");
+                }
 #endif
-                xr_check(xrDestroyInstance(m_data->instance), "Failed to destroy instance");
+                if (m_data->instance != XR_NULL_HANDLE)
+                {
+                    xr_check(xrDestroyInstance(m_data->instance), "Failed to destroy instance");
+                }
 
                 delete m_data;
             }
@@ -366,68 +381,111 @@ namespace xre
         }
     }
 
+    void XrSystem::start_session()
+    {
+        // Create session
+        {
+            XrSessionCreateInfo session_create_info {
+                .type = XR_TYPE_SESSION_CREATE_INFO,
 #ifdef RENDERER_VULKAN
+                // We need to give the binding so that OpenXR knows about our Vulkan setup
+                .next = &m_data->graphics_binding,
+#else
+                .next = XR_NULL_HANDLE,
+#endif
+                .systemId = m_data->system_id,
+            };
+            xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session), "Failed to create session");
+        }
+    }
+
+#ifdef RENDERER_VULKAN
+
     VulkanCompatibility XrSystem::get_vulkan_compatibility() const
     {
-        if (!m_data)
-        {
-            throw std::runtime_error("XrManager not initialized");
-        }
-
-        // Find requirements for renderer
-        XrGraphicsRequirementsVulkanKHR graphics_requirements {
+        XrGraphicsRequirementsVulkanKHR requirements {
             .type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR,
             .next = XR_NULL_HANDLE,
         };
-        xr_check(xrGetVulkanGraphicsRequirementsKHR(m_data->instance, m_data->system_id, &graphics_requirements),
-                 "Failed to get graphics requirements");
+        xr_check(xrGetVulkanGraphicsRequirements2KHR(m_data->instance, m_data->system_id, &requirements),
+                 "Failed to get Vulkan requirements");
 
         return VulkanCompatibility {
-            .min_version = make_version(graphics_requirements.minApiVersionSupported),
-            .max_version = make_version(graphics_requirements.maxApiVersionSupported),
+            .min_version = make_version(requirements.minApiVersionSupported),
+            .max_version = make_version(requirements.maxApiVersionSupported),
         };
     }
 
-    std::vector<std::string> XrSystem::get_required_vulkan_extensions(std::vector<const char *> &out_extensions) const
+    int XrSystem::create_vulkan_instance(const VkInstanceCreateInfo &create_info,
+                                         PFN_vkGetInstanceProcAddr   vk_get_instance_proc_addr,
+                                         VkInstance                 &out_instance) const
+    {
+        XrVulkanInstanceCreateInfoKHR vulkan_instance_create_info {XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
+        vulkan_instance_create_info.systemId               = m_data->system_id;
+        vulkan_instance_create_info.pfnGetInstanceProcAddr = vk_get_instance_proc_addr;
+        vulkan_instance_create_info.vulkanCreateInfo       = &create_info;
+
+        // Create instance
+        VkResult result;
+        xr_check(xrCreateVulkanInstanceKHR(m_data->instance, &vulkan_instance_create_info, &out_instance, &result),
+                 "Failed to create Vulkan instance");
+        m_data->graphics_binding.instance = out_instance;
+        return result;
+    }
+
+    VkPhysicalDevice XrSystem::get_vulkan_physical_device() const
     {
         if (!m_data)
         {
             throw std::runtime_error("XrManager not initialized");
         }
 
-        // Get required buffer capacity
-        uint32_t capacity = 0;
-        xr_check(xrGetVulkanInstanceExtensionsKHR(m_data->instance, m_data->system_id, 0, &capacity, nullptr));
-        // Get space-delimited list of extension names in a buffer
-        char *buffer = new char[capacity];
-        xr_check(xrGetVulkanInstanceExtensionsKHR(m_data->instance, m_data->system_id, capacity, &capacity, buffer));
+        // Find physical device
+        VkPhysicalDevice physical_device = VK_NULL_HANDLE;
 
-        std::string_view extensions(buffer, capacity);
-        std::vector<std::string> extension_names;
-        extension_names.reserve(6);
+        XrVulkanGraphicsDeviceGetInfoKHR graphics_device_get_info {
+            .type           = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR,
+            .next           = XR_NULL_HANDLE,
+            .systemId       = m_data->system_id,
+            .vulkanInstance = m_data->graphics_binding.instance,
+        };
 
-        // Create new dynamic std::strings for each extension name and add it
-        while (!extensions.empty())
-        {
-            auto space = extensions.find(' ');
-            if (space == std::string_view::npos)
-            {
-                extension_names.emplace_back(extensions);
-                out_extensions.push_back(extension_names.back().c_str());
-                break;
-            }
-            else
-            {
-                extension_names.emplace_back(extensions.substr(0, space));
-                out_extensions.push_back(extension_names.back().c_str());
-                extensions.remove_prefix(space + 1);
-            }
-        }
+        xr_check(xrGetVulkanGraphicsDevice2KHR(m_data->instance, &graphics_device_get_info, &physical_device),
+                 "Failed to get Vulkan graphics device");
 
-        delete[] buffer;
+        m_data->graphics_binding.physicalDevice = physical_device;
 
-        return extension_names;
+        return physical_device;
     }
+
+    int XrSystem::create_vulkan_device(const VkDeviceCreateInfo &create_info,
+                                       PFN_vkGetInstanceProcAddr vk_get_instance_proc_addr,
+                                       VkDevice                 &out_device) const
+    {
+        XrVulkanDeviceCreateInfoKHR vulkan_device_create_info {
+            .type                   = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
+            .next                   = XR_NULL_HANDLE,
+            .systemId               = m_data->system_id,
+            .pfnGetInstanceProcAddr = vk_get_instance_proc_addr,
+            .vulkanPhysicalDevice   = m_data->graphics_binding.physicalDevice,
+            .vulkanCreateInfo       = &create_info,
+        };
+
+        // Create device
+        VkResult result;
+        xr_check(xrCreateVulkanDeviceKHR(m_data->instance, &vulkan_device_create_info, &out_device, &result),
+                 "Failed to create Vulkan device");
+        m_data->graphics_binding.device = out_device;
+
+        return result;
+    }
+
+    void XrSystem::register_graphics_queue(uint32_t queue_family, uint32_t queue_index) const
+    {
+        m_data->graphics_binding.queueFamilyIndex = queue_family;
+        m_data->graphics_binding.queueIndex       = queue_index;
+    }
+
 #endif
 } // namespace xre
 

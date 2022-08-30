@@ -18,6 +18,13 @@ namespace xre
         Renderer renderer      = {};
         XrSystem xr_system     = {};
         Window   mirror_window = {};
+
+        ~Data()
+        {
+            xr_system.~XrSystem();
+            renderer.~Renderer();
+            mirror_window.~Window();
+        }
     };
 
     // --=== API ===--
@@ -104,6 +111,53 @@ namespace xre
             }
 
             m_data = nullptr;
+        }
+    }
+
+    void Engine::run_main_loop()
+    {
+        if (m_data == nullptr)
+        {
+            throw std::runtime_error("Engine not initialized");
+        }
+
+        // Init variables
+        bool     should_quit        = false;
+        uint64_t current_frame_time = 0;
+        double   delta_time         = 0.0;
+
+        // Register close event
+//        m_data->window.on_close()->subscribe([&should_quit](std::nullptr_t _) { should_quit = true; });
+
+#ifdef NO_INTERACTIVE
+        // In tests, we want a timeout
+        uint64_t timeout = 5000;
+
+        // Run sleep in another thread, then send event
+        std::thread(
+            [&timeout, &should_quit]()
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
+                should_quit = true;
+            })
+            .detach();
+#endif
+
+        // Main loop
+        while (!should_quit)
+        {
+            // Update delta time
+//            delta_time = Window::compute_delta_time(&current_frame_time);
+
+            // TODO temp
+            // Handle events
+            should_quit = m_data->mirror_window.handle_events();
+
+            // Run rendering
+//            m_data->renderer.draw();
+
+            // Trigger update
+//            m_data->update_event.send(delta_time);
         }
     }
 

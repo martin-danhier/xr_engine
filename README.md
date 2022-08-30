@@ -7,6 +7,8 @@ Objectives of this project:
 - Learn OpenXR API
 - Find a good architecture for XR, and the differences with "flat" engines
 
+Ideas for better name are welcome.
+
 ## Configure development environment
 
 1. Clone this repository with the `--recurse-submodules` flag.

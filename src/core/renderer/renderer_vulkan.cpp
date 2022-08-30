@@ -21,7 +21,7 @@
 #error "Vulkan SDK 1.3 is required"
 #endif
 
-#define VULKAN_API_VERSION VK_API_VERSION_1_2
+#define VULKAN_API_VERSION VK_API_VERSION_1_0
 
 namespace xre
 {
@@ -340,63 +340,6 @@ namespace xre
 
         // endregion
 
-        // region Physical device functions
-
-        /**
-         * @brief Computes a score for the given physical device.
-         * @param device is the device to evaluate.
-         * @return the score of that device. A bigger score means that the device is better suited.
-         */
-        uint32_t rg_renderer_rate_physical_device(const VkPhysicalDevice &device)
-        {
-            uint32_t score = 0;
-
-            // Get properties and features of that device
-            VkPhysicalDeviceProperties device_properties;
-            VkPhysicalDeviceFeatures   device_features;
-            vkGetPhysicalDeviceProperties(device, &device_properties);
-            vkGetPhysicalDeviceFeatures(device, &device_features);
-
-            // Prefer something else than llvmpipe, which is testing use only
-#ifdef __cpp_lib_starts_ends_with
-            if (!std::string(device_properties.deviceName).starts_with("llvmpipe"))
-            {
-                score += 15000;
-            }
-#else
-            if (!std::string(device_properties.deviceName).find("llvmpipe"))
-            {
-                score += 15000;
-            }
-#endif
-
-            // Prefer discrete gpu when available
-            if (device_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-            {
-                score += 10000;
-            }
-
-            // The bigger, the better
-            score += device_properties.limits.maxImageDimension2D;
-
-            // The device needs to support the following device extensions, otherwise it is unusable
-            std::vector<const char *> required_device_extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-            bool extensions_are_supported = check_device_extension_support(device, required_device_extensions);
-
-            // Reset score if the extension are not supported because it is mandatory
-            if (!extensions_are_supported)
-            {
-                score = 0;
-            }
-
-            std::cout << "GPU: " << device_properties.deviceName << " | Score: " << score << "\n";
-
-            return score;
-        }
-
-        // endregion
-
     } // namespace renderer
 
     using namespace renderer;
@@ -687,6 +630,13 @@ namespace xre
 
         // -- Init Vulkan --
 
+        // Get requirements
+        auto requirements = m_data->xr_system.get_vulkan_compatibility();
+        auto version = VK_MAKE_VERSION(requirements.max_version.major, requirements.max_version.minor, 0);
+        if (version > VULKAN_API_VERSION) {
+            throw std::runtime_error("Vulkan version is too old");
+        }
+
         std::cout << "Using Vulkan backend, version " << VK_API_VERSION_MAJOR(VULKAN_API_VERSION) << "."
                   << VK_API_VERSION_MINOR(VULKAN_API_VERSION) << "\n";
 
@@ -705,10 +655,6 @@ namespace xre
 #endif
             // Get the extensions that the window and XR system need
             auto required_extensions = std::vector<const char *>();
-            required_extensions.reserve(3);
-
-            // Get the buffer too because these strings are not constant, so we need to keep them alive
-            auto buffer = m_data->xr_system.get_required_vulkan_extensions(required_extensions);
 
             if (m_data->mirror_window.is_valid())
             {
@@ -762,7 +708,9 @@ namespace xre
                 .ppEnabledExtensionNames = required_extensions.data(),
             };
 
-            vk_check(vkCreateInstance(&instanceCreateInfo, nullptr, &m_data->instance), "Couldn't create instance.");
+            vk_check(static_cast<VkResult>(
+                         m_data->xr_system.create_vulkan_instance(instanceCreateInfo, vkGetInstanceProcAddr, m_data->instance)),
+                     "Couldn't create instance.");
 
             // Register instance in Volk
             volkLoadInstance(m_data->instance);
@@ -791,33 +739,8 @@ namespace xre
         // region Physical device and queue families selection
 
         {
-            // Get the number of available devices
-            uint32_t available_physical_devices_count = 0;
-            vkEnumeratePhysicalDevices(m_data->instance, &available_physical_devices_count, nullptr);
-
-            // Create an array big enough to hold everything and get the devices themselves
-            std::vector<VkPhysicalDevice> available_physical_devices(available_physical_devices_count);
-            vkEnumeratePhysicalDevices(m_data->instance, &available_physical_devices_count, available_physical_devices.data());
-
-            // Find the best physical device
-            // For that, we will assign each device a score and keep the best one
-            uint32_t current_max_score = 0;
-            for (uint32_t i = 0; i < available_physical_devices_count; i++)
-            {
-                const VkPhysicalDevice &checked_device = available_physical_devices[i];
-                uint32_t                score          = rg_renderer_rate_physical_device(checked_device);
-
-                if (score > current_max_score)
-                {
-                    // New best device found, save it.
-                    // We don't need to keep the previous one, since we definitely won't choose it.
-                    current_max_score       = score;
-                    m_data->physical_device = checked_device;
-                }
-            }
-
-            // There is a problem if the device is still null: it means none was found.
-            check(m_data->physical_device != VK_NULL_HANDLE, "No suitable GPU was found.");
+            // Get physical device
+            m_data->physical_device = m_data->xr_system.get_vulkan_physical_device();
 
             // Log chosen GPU
             VkPhysicalDeviceProperties physical_device_properties;
@@ -891,6 +814,14 @@ namespace xre
         // region Device and queues creation
 
         {
+            // Get required device extensions
+            std::vector<const char *> required_device_extensions;
+
+            if (m_data->mirror_window.is_valid())
+            {
+                required_device_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            }
+
             std::vector<VkDeviceQueueCreateInfo> queue_create_infos;
             queue_create_infos.reserve(2);
 
@@ -929,9 +860,9 @@ namespace xre
                 });
             }
 
-            const std::vector<const char *> required_device_extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
             // Create the logical device
+            VkPhysicalDeviceFeatures features = {};
+
             VkDeviceCreateInfo device_create_info = {
                 // Struct infos
                 .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -945,9 +876,10 @@ namespace xre
                 // Extensions
                 .enabledExtensionCount   = static_cast<uint32_t>(required_device_extensions.size()),
                 .ppEnabledExtensionNames = required_device_extensions.data(),
-                .pEnabledFeatures        = nullptr,
+                .pEnabledFeatures        = &features,
             };
-            vk_check(vkCreateDevice(m_data->physical_device, &device_create_info, nullptr, &m_data->device),
+            vk_check(static_cast<VkResult>(
+                         m_data->xr_system.create_vulkan_device(device_create_info, vkGetInstanceProcAddr, m_data->device)),
                      "Couldn't create logical device.");
 
             // Load device in volk
@@ -955,7 +887,8 @@ namespace xre
 
             // Get created queues
             vkGetDeviceQueue(m_data->device, m_data->graphics_queue.family_index, 0, &m_data->graphics_queue.queue);
-            // Get the transfer queue. If it is the same as the graphics one, it will be a second queue on the same family
+            // Get the transfer queue. If it is the same as the graphics one, it will be a second queue on the same
+            // family
             if (m_data->graphics_queue.family_index == m_data->transfer_queue.family_index)
             {
                 vkGetDeviceQueue(m_data->device, m_data->transfer_queue.family_index, 1, &m_data->transfer_queue.queue);
@@ -976,6 +909,11 @@ namespace xre
                                                 m_data->physical_device,
                                                 m_data->graphics_queue.family_index,
                                                 m_data->transfer_queue.family_index));
+
+        // --=== XR ===--
+
+        // Tell XR which queues we will use
+        m_data->xr_system.register_graphics_queue(m_data->graphics_queue.family_index, 0);
     }
 
     Renderer::Renderer(const Renderer &other) : m_data(other.m_data)
@@ -1026,7 +964,6 @@ namespace xre
 
             if (m_data->reference_count == 0)
             {
-
                 // Destroy allocator
                 m_data->allocator.~Allocator();
 

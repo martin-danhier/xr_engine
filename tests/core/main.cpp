@@ -17,4 +17,6 @@ TEST
     Engine engine;
 
     ASSERT_NO_THROWS(engine = Engine(settings));
+
+    engine.run_main_loop();
 }

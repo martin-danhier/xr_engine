@@ -19,6 +19,8 @@ namespace xre
         Engine &operator=(Engine &&other) noexcept;
         ~Engine();
 
+        void run_main_loop();
+
     };
 
 } // namespace xre

@@ -40,6 +40,9 @@ namespace xre
          * */
         [[nodiscard]] bool is_valid() const noexcept;
 
+        bool handle_events(); // TODO use event based
+
+
 #ifdef RENDERER_VULKAN
         void get_required_vulkan_extensions(std::vector<const char *> &out_extensions) const;
 #endif
