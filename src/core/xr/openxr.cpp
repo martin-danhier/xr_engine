@@ -35,6 +35,11 @@ PFN_xrCreateVulkanInstanceKHR           xrCreateVulkanInstanceKHR           = nu
 PFN_xrCreateVulkanDeviceKHR             xrCreateVulkanDeviceKHR             = nullptr;
 #endif
 
+// Defines
+
+#define VIEW_CONFIGURATION_TYPE XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
+#define FORM_FACTOR             XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY
+
 namespace xre
 {
     // ---=== Structs ===---
@@ -51,16 +56,26 @@ namespace xre
         XrSession  session         = XR_NULL_HANDLE;
         bool       session_running = false;
 
+        XrSpace reference_space = XR_NULL_HANDLE;
+
+        std::vector<XrViewConfigurationView> view_configurations;
+        std::vector<XrView>                  views;
+
 #ifdef RENDERER_VULKAN
         // Data passed by the renderer required for the binding between OpenXR and Vulkan
         XrGraphicsBindingVulkan2KHR graphics_binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr};
 #endif
     };
 
+    // ---=== Constants ===---
+    constexpr XrPosef XR_POSE_IDENTITY = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
+
     // ---=== Utils ===---
 
     namespace xr
     {
+        // region Conversions
+
         std::string xr_result_to_string(XrResult result)
         {
             switch (result)
@@ -91,12 +106,27 @@ namespace xre
             }
         }
 
+        std::string xr_reference_space_type_to_string(XrReferenceSpaceType space_type)
+        {
+            switch (space_type)
+            {
+                case XR_REFERENCE_SPACE_TYPE_STAGE: return "Stage";
+                case XR_REFERENCE_SPACE_TYPE_LOCAL: return "Local";
+                case XR_REFERENCE_SPACE_TYPE_VIEW: return "View";
+                default: return std::to_string(space_type);
+            }
+        }
+
         Version make_version(const XrVersion &version)
         {
             return Version {static_cast<uint8_t>(XR_VERSION_MAJOR(version)),
                             static_cast<uint8_t>(XR_VERSION_MINOR(version)),
                             static_cast<uint16_t>(XR_VERSION_PATCH(version))};
         }
+
+        // endregion
+
+        // Check support
 
         bool check_xr_instance_extension_support(const std::vector<const char *> &desired_extensions)
         {
@@ -177,6 +207,40 @@ namespace xre
             return valid;
         }
 
+        XrReferenceSpaceType choose_reference_space_type(XrSession session)
+        {
+            // Define the priority of each space type. We will take the first one that is available.
+            XrReferenceSpaceType space_type_preference[] = {
+                XR_REFERENCE_SPACE_TYPE_STAGE, // Based on play area center (most common for room-scale VR)
+                XR_REFERENCE_SPACE_TYPE_LOCAL, // Based on starting location
+            };
+
+            // Get available space types
+            uint32_t available_spaces_count = 0;
+            xr_check(xrEnumerateReferenceSpaces(session, 0, &available_spaces_count, nullptr));
+            XrReferenceSpaceType available_spaces[available_spaces_count];
+            xr_check(xrEnumerateReferenceSpaces(session, available_spaces_count, &available_spaces_count, available_spaces));
+
+            // Choose the first available space type
+            for (const auto &space_type : space_type_preference)
+            {
+                for (const auto &available_space : available_spaces)
+                {
+                    if (space_type == available_space)
+                    {
+                        return space_type;
+                    }
+                }
+            }
+
+            check(false, "No supported reference space type found.");
+            throw;
+        }
+
+        // endregion
+
+        // region Debug utils
+
         /**
          * Callback for the vulkan debug messenger
          * @param message_severity Severity of the message
@@ -221,6 +285,9 @@ namespace xre
 
             return XR_FALSE;
         }
+
+        // endregion
+
     } // namespace xr
     using namespace xr;
 
@@ -268,7 +335,7 @@ namespace xre
                 .type            = XR_TYPE_INSTANCE_CREATE_INFO,
                 .next            = XR_NULL_HANDLE,
                 .applicationInfo = xr_app_info,
-                // Layers
+            // Layers
 #ifdef USE_OPENXR_DEBUG_UTILS
                 .enabledApiLayerCount = static_cast<uint32_t>(enabled_layers.size()),
                 .enabledApiLayerNames = enabled_layers.data(),
@@ -349,7 +416,7 @@ namespace xre
                 .type = XR_TYPE_SYSTEM_GET_INFO,
                 .next = XR_NULL_HANDLE,
                 // We only support headsets
-                .formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY,
+                .formFactor = FORM_FACTOR,
             };
             xr_check(xrGetSystem(m_data->instance, &system_info, &m_data->system_id), "Failed to get system");
 
@@ -416,6 +483,11 @@ namespace xre
 
             if (m_data->reference_count == 0)
             {
+                if (m_data->reference_space != XR_NULL_HANDLE)
+                {
+                    xr_check(xrDestroySpace(m_data->reference_space), "Failed to destroy reference space");
+                }
+
                 if (m_data->session != XR_NULL_HANDLE)
                 {
                     xr_check(xrDestroySession(m_data->session), "Failed to destroy session");
@@ -449,12 +521,62 @@ namespace xre
                 // We need to give the binding so that OpenXR knows about our Vulkan setup
                 .next = &m_data->graphics_binding,
 #else
-                .next = XR_NULL_HANDLE,
+                .next                 = XR_NULL_HANDLE,
 #endif
                 .systemId = m_data->system_id,
             };
             xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session),
                      "Failed to create session. Is the headset plugged in?");
+        }
+
+        // Create reference space
+        {
+            auto space_type = choose_reference_space_type(m_data->session);
+
+            // Print space type
+            std::cout << "Chosen space type: " << xr_reference_space_type_to_string(space_type) << std::endl;
+
+            // Create space
+            XrReferenceSpaceCreateInfo ref_space_info {
+                .type                 = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+                .next                 = XR_NULL_HANDLE,
+                .referenceSpaceType   = space_type,
+                .poseInReferenceSpace = XR_POSE_IDENTITY,
+            };
+            xr_check(xrCreateReferenceSpace(m_data->session, &ref_space_info, &m_data->reference_space),
+                     "Failed to create reference space");
+        }
+
+        // Create swapchains
+        {
+            // Get the views (for example, the left and right eyes) that we want to render to
+            uint32_t view_configuration_count = 0;
+            xr_check(xrEnumerateViewConfigurationViews(m_data->instance,
+                                                       m_data->system_id,
+                                                       VIEW_CONFIGURATION_TYPE,
+                                                       0,
+                                                       &view_configuration_count,
+                                                       nullptr));
+            m_data->view_configurations.resize(view_configuration_count, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+            m_data->views.resize(view_configuration_count, {XR_TYPE_VIEW});
+            xr_check(xrEnumerateViewConfigurationViews(m_data->instance,
+                                                       m_data->system_id,
+                                                       VIEW_CONFIGURATION_TYPE,
+                                                       view_configuration_count,
+                                                       &view_configuration_count,
+                                                       m_data->view_configurations.data()));
+
+            // Create the swapchains
+            for (uint32_t view_i = 0; view_i < view_configuration_count; view_i++)
+            {
+                XrSwapchainCreateInfo swapchain_create_info {
+                    .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+                    .next = XR_NULL_HANDLE,
+                    .createFlags = 0,
+                    .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+                    .format = XR_FORMAT_R8G8B8A8_UNORM_SRGB,
+                }
+            }
         }
     }
 

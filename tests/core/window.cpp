@@ -11,7 +11,17 @@ TEST
 {
     xre::Window window;
 
-    ASSERT_NO_THROWS(window = xre::Window({500, 500}, "Test"));
+    xre::Settings settings {
+        xre::ApplicationInfo {
+            "Test Application",
+            {0, 1, 0},
+        },
+        {
+            .enabled = true,
+        },
+    };
+
+    ASSERT_NO_THROWS(window = xre::Window(settings));
 
     xre::Window window_copy = window;
 
