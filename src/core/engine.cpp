@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <xr_engine/core/global.h>
-#include <xr_engine/core/renderer.h>
+#include <xr_engine/core/xr_renderer.h>
 #include <xr_engine/core/window.h>
 #include <xr_engine/core/xr/xr_system.h>
 
@@ -15,14 +15,14 @@ namespace xre
         uint8_t reference_count = 0;
 
         Settings settings      = {};
-        Renderer renderer      = {};
+        XrRenderer renderer      = {};
         XrSystem xr_system     = {};
         Window   mirror_window = {};
 
         ~Data()
         {
             xr_system.~XrSystem();
-            renderer.~Renderer();
+            renderer.~XrRenderer();
             mirror_window.~Window();
         }
     };
@@ -47,7 +47,8 @@ namespace xre
             }
 
             // Create renderer
-            m_data->renderer = Renderer(m_data->xr_system, settings, m_data->mirror_window);
+            auto window = settings.mirror_window_settings.enabled ? &m_data->mirror_window : nullptr;
+            m_data->renderer = m_data->xr_system.create_renderer( settings, window);
 
         }
         catch (const std::exception &e)

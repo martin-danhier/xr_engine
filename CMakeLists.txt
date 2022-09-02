@@ -14,9 +14,6 @@ set(settings
 
         # Rendering framework: one of {RENDERER_VULKAN}
         RENDERER_VULKAN
-
-        # XR framework: one of {XR_OPENXR}
-        XR_OPENXR
         )
 
 # Enable/disable sanitizers
@@ -51,11 +48,12 @@ endif ()
 # Add source files for main lib
 set(xr_engine_lib_sources
         src/core/engine.cpp
-        src/core/xr/openxr.cpp
+        src/core/xr/xr_system.cpp
         src/core/global.cpp
-        src/core/renderer/renderer_vulkan.cpp
+        src/core/renderer/xr_renderer_vulkan.cpp
         src/core/window/window_sdl2.cpp
         src/utils/global_utils.cpp
+        src/utils/openxr_utils.cpp
         )
 
 # Add header directories for main lib
@@ -78,6 +76,7 @@ set(test_resources
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_definitions(
             DEBUG
+            USE_OPENXR_VALIDATION_LAYERS
     )
 elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_definitions(
@@ -93,26 +92,14 @@ endforeach ()
 
 # Vulkan specific
 if (DEFINED RENDERER_VULKAN)
-    add_compile_definitions(VK_NO_PROTOTYPES)
+    add_compile_definitions(
+            VK_NO_PROTOTYPES
+            XR_USE_GRAPHICS_API_VULKAN
+    )
 
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_definitions(
                 USE_VK_VALIDATION_LAYERS
-        )
-    endif ()
-endif ()
-
-# OpenXR specific
-if (DEFINED XR_OPENXR)
-    if (DEFINED RENDERER_VULKAN)
-        add_compile_definitions(
-                XR_USE_GRAPHICS_API_VULKAN
-        )
-    endif ()
-
-    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_definitions(
-                USE_OPENXR_DEBUG_UTILS
         )
     endif ()
 endif ()
@@ -219,11 +206,9 @@ if (DEFINED WINDOW_SDL2)
             )
 endif ()
 
-if (DEFINED XR_OPENXR)
-    target_link_libraries(xr_engine_lib PUBLIC
-            openxr
-            )
-endif ()
+target_link_libraries(xr_engine_lib PUBLIC
+        openxr
+        )
 
 ##################################################################
 ###                           TESTING                          ###

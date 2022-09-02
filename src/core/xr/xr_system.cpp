@@ -1,55 +1,41 @@
-/**
- * @brief Implementation of core OpenXR features
- * @author Martin Danhier
- */
-
-#ifdef XR_OPENXR
-
 #include "xr_engine/core/xr/xr_system.h"
 
-#ifdef RENDERER_VULKAN
-#include <vulkan/vulkan.h>
-#endif
-#include <openxr/openxr.h>
-#include <openxr/openxr_platform.h>
 #include <vector>
 #include <xr_engine/core/global.h>
+#include <xr_engine/core/xr_renderer.h>
 #include <xr_engine/utils/global_utils.h>
+#include <xr_engine/utils/openxr_utils.h>
 
 #ifndef _MSC_VER
 // Not used with MSVC
 #include <cstring>
 #endif
 
-// Dynamic functions
-
-#ifdef USE_OPENXR_DEBUG_UTILS
-PFN_xrCreateDebugUtilsMessengerEXT  xrCreateDebugUtilsMessengerEXT  = nullptr;
-PFN_xrDestroyDebugUtilsMessengerEXT xrDestroyDebugUtilsMessengerEXT = nullptr;
-#endif
-
-#ifdef RENDERER_VULKAN
-PFN_xrGetVulkanGraphicsRequirements2KHR xrGetVulkanGraphicsRequirements2KHR = nullptr;
-PFN_xrGetVulkanGraphicsDevice2KHR       xrGetVulkanGraphicsDevice2KHR       = nullptr;
-PFN_xrCreateVulkanInstanceKHR           xrCreateVulkanInstanceKHR           = nullptr;
-PFN_xrCreateVulkanDeviceKHR             xrCreateVulkanDeviceKHR             = nullptr;
-#endif
-
-// Defines
+namespace xre
+{
+    // ---=== Constants ===---
 
 #define VIEW_CONFIGURATION_TYPE XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
 #define FORM_FACTOR             XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY
 
-namespace xre
-{
-    // ---=== Structs ===---
+    constexpr XrPosef XR_POSE_IDENTITY = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
+
+    // ---=== Function pointers ===---
+
+#ifdef USE_OPENXR_VALIDATION_LAYERS
+    PFN_xrCreateDebugUtilsMessengerEXT  xrCreateDebugUtilsMessengerEXT  = nullptr;
+    PFN_xrDestroyDebugUtilsMessengerEXT xrDestroyDebugUtilsMessengerEXT = nullptr;
+#endif
+
+    // --=== Structs ===---
 
     struct XrSystem::Data
     {
         uint8_t reference_count = 0;
+        XrRenderer renderer     = {};
 
         XrInstance instance = XR_NULL_HANDLE;
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
         XrDebugUtilsMessengerEXT debug_messenger = XR_NULL_HANDLE;
 #endif
         XrSystemId system_id       = XR_NULL_SYSTEM_ID;
@@ -57,54 +43,13 @@ namespace xre
         bool       session_running = false;
 
         XrSpace reference_space = XR_NULL_HANDLE;
-
-        std::vector<XrViewConfigurationView> view_configurations;
-        std::vector<XrView>                  views;
-
-#ifdef RENDERER_VULKAN
-        // Data passed by the renderer required for the binding between OpenXR and Vulkan
-        XrGraphicsBindingVulkan2KHR graphics_binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr};
-#endif
     };
-
-    // ---=== Constants ===---
-    constexpr XrPosef XR_POSE_IDENTITY = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
 
     // ---=== Utils ===---
 
     namespace xr
     {
         // region Conversions
-
-        std::string xr_result_to_string(XrResult result)
-        {
-            switch (result)
-            {
-                case XR_SUCCESS: return "XR_SUCCESS";
-                case XR_ERROR_API_VERSION_UNSUPPORTED: return "XR_ERROR_API_VERSION_UNSUPPORTED";
-                case XR_ERROR_FUNCTION_UNSUPPORTED: return "XR_ERROR_FUNCTION_UNSUPPORTED";
-                case XR_ERROR_GRAPHICS_DEVICE_INVALID: return "XR_ERROR_GRAPHICS_DEVICE_INVALID";
-                default: return std::to_string(result);
-            }
-        }
-
-        void xr_check(XrResult result, const std::string &error_message = "")
-        {
-            // Warnings
-
-            // Errors
-            if (result != XR_SUCCESS)
-            {
-                // Pretty print error
-                std::cerr << "[OpenXR Error] An OpenXR function call returned XrResult = " << xr_result_to_string(result) << "\n";
-
-                // Optional custom error message precision
-                if (!error_message.empty())
-                {
-                    std::cerr << "Precision: " << error_message << "\n";
-                }
-            }
-        }
 
         std::string xr_reference_space_type_to_string(XrReferenceSpaceType space_type)
         {
@@ -115,13 +60,6 @@ namespace xre
                 case XR_REFERENCE_SPACE_TYPE_VIEW: return "View";
                 default: return std::to_string(space_type);
             }
-        }
-
-        Version make_version(const XrVersion &version)
-        {
-            return Version {static_cast<uint8_t>(XR_VERSION_MAJOR(version)),
-                            static_cast<uint8_t>(XR_VERSION_MINOR(version)),
-                            static_cast<uint16_t>(XR_VERSION_PATCH(version))};
         }
 
         // endregion
@@ -218,8 +156,8 @@ namespace xre
             // Get available space types
             uint32_t available_spaces_count = 0;
             xr_check(xrEnumerateReferenceSpaces(session, 0, &available_spaces_count, nullptr));
-            XrReferenceSpaceType available_spaces[available_spaces_count];
-            xr_check(xrEnumerateReferenceSpaces(session, available_spaces_count, &available_spaces_count, available_spaces));
+            std::vector<XrReferenceSpaceType> available_spaces(available_spaces_count);
+            xr_check(xrEnumerateReferenceSpaces(session, available_spaces_count, &available_spaces_count, available_spaces.data()));
 
             // Choose the first available space type
             for (const auto &space_type : space_type_preference)
@@ -291,7 +229,7 @@ namespace xre
     } // namespace xr
     using namespace xr;
 
-    // ---=== Manager API ===---
+    // --=== API ===--
 
     XrSystem::XrSystem(const Settings &settings) : m_data(new Data)
     {
@@ -315,17 +253,15 @@ namespace xre
 
             // Create instance
             std::vector<const char *> required_extensions = {
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
                 XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
 #endif
-#ifdef RENDERER_VULKAN
-                XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
-#endif
+                XrRenderer::get_required_openxr_extension(),
             };
 
             check(check_xr_instance_extension_support(required_extensions), "Not all required OpenXR extensions are supported.");
 
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
             std::vector<const char *> enabled_layers;
             enabled_layers.push_back("XR_APILAYER_LUNARG_core_validation");
             check(check_layer_support(enabled_layers), "OpenXR validation layers requested, but not available.");
@@ -336,7 +272,7 @@ namespace xre
                 .next            = XR_NULL_HANDLE,
                 .applicationInfo = xr_app_info,
             // Layers
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
                 .enabledApiLayerCount = static_cast<uint32_t>(enabled_layers.size()),
                 .enabledApiLayerNames = enabled_layers.data(),
 #else
@@ -361,7 +297,7 @@ namespace xre
 
         // === Load dynamic functions ===
         {
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
             xr_check(xrGetInstanceProcAddr(m_data->instance,
                                            "xrCreateDebugUtilsMessengerEXT",
                                            reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateDebugUtilsMessengerEXT)),
@@ -371,28 +307,10 @@ namespace xre
                                            reinterpret_cast<PFN_xrVoidFunction *>(&xrDestroyDebugUtilsMessengerEXT)),
                      "Failed to load xrDestroyDebugUtilsMessengerEXT");
 #endif
-#ifdef RENDERER_VULKAN
-            xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanGraphicsDevice2KHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsDevice2KHR)),
-                     "Failed to load xrGetVulkanGraphicsDevice2KHR");
-            xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrCreateVulkanInstanceKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanInstanceKHR)),
-                     "Failed to load xrCreateVulkanInstanceKHR");
-            xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrCreateVulkanDeviceKHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanDeviceKHR)),
-                     "Failed to load xrCreateVulkanDeviceKHR");
-            xr_check(xrGetInstanceProcAddr(m_data->instance,
-                                           "xrGetVulkanGraphicsRequirements2KHR",
-                                           reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsRequirements2KHR)),
-                     "Failed to load xrGetVulkanGraphicsRequirements2KHR");
-#endif
         }
 
         // === Create debug messenger ===
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
         {
             XrDebugUtilsMessengerCreateInfoEXT debug_messenger_create_info = {
                 // Struct info
@@ -430,17 +348,23 @@ namespace xre
             std::cout << "System name: " << system_properties.systemName << "\n";
         }
 
-        // Set reference count
+        // Init reference count
         m_data->reference_count = 1;
     }
 
-    XrSystem::XrSystem(const XrSystem &other) : m_data(other.m_data)
+    XrSystem::XrSystem(const XrSystem &other)
     {
+        m_data = other.m_data;
+
+        // Increment reference count
         m_data->reference_count++;
     }
 
-    XrSystem::XrSystem(XrSystem &&other) noexcept : m_data(other.m_data)
+    XrSystem::XrSystem(XrSystem &&other) noexcept
     {
+        m_data = other.m_data;
+
+        // Take the other's data
         other.m_data = nullptr;
     }
 
@@ -451,8 +375,10 @@ namespace xre
             return *this;
         }
 
+        // Decrement reference count
         this->~XrSystem();
 
+        // Copy data
         m_data = other.m_data;
         m_data->reference_count++;
 
@@ -466,8 +392,10 @@ namespace xre
             return *this;
         }
 
+        // Decrement reference count
         this->~XrSystem();
 
+        // Take the other's data
         m_data       = other.m_data;
         other.m_data = nullptr;
 
@@ -478,7 +406,6 @@ namespace xre
     {
         if (m_data)
         {
-            // Decrement reference count
             m_data->reference_count--;
 
             if (m_data->reference_count == 0)
@@ -493,7 +420,7 @@ namespace xre
                     xr_check(xrDestroySession(m_data->session), "Failed to destroy session");
                 }
 
-#ifdef USE_OPENXR_DEBUG_UTILS
+#ifdef USE_OPENXR_VALIDATION_LAYERS
                 if (m_data->debug_messenger != XR_NULL_HANDLE)
                 {
                     xr_check(xrDestroyDebugUtilsMessengerEXT(m_data->debug_messenger), "Failed to destroy debug messenger");
@@ -511,18 +438,34 @@ namespace xre
         }
     }
 
-    void XrSystem::finish_setup()
+    // region Friend API
+
+    XrInstance XrSystem::instance() const
+    {
+        return m_data->instance;
+    }
+
+    XrSystemId XrSystem::system_id() const
+    {
+        return m_data->system_id;
+    }
+
+    XrRenderer XrSystem::create_renderer(const Settings &settings, Window *mirror_window)
+    {
+        check(!m_data->renderer.is_valid(), "Renderer already created");
+        m_data->renderer = {*this, settings, mirror_window};
+        return m_data->renderer;
+    }
+
+    void XrSystem::finish_setup(void *graphics_binding) const
     {
         // Create session
         {
             XrSessionCreateInfo session_create_info {
                 .type = XR_TYPE_SESSION_CREATE_INFO,
-#ifdef RENDERER_VULKAN
                 // We need to give the binding so that OpenXR knows about our Vulkan setup
-                .next = &m_data->graphics_binding,
-#else
-                .next                 = XR_NULL_HANDLE,
-#endif
+                .next = graphics_binding,
+                .createFlags = 0,
                 .systemId = m_data->system_id,
             };
             xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session),
@@ -546,127 +489,7 @@ namespace xre
             xr_check(xrCreateReferenceSpace(m_data->session, &ref_space_info, &m_data->reference_space),
                      "Failed to create reference space");
         }
-
-        // Create swapchains
-        {
-            // Get the views (for example, the left and right eyes) that we want to render to
-            uint32_t view_configuration_count = 0;
-            xr_check(xrEnumerateViewConfigurationViews(m_data->instance,
-                                                       m_data->system_id,
-                                                       VIEW_CONFIGURATION_TYPE,
-                                                       0,
-                                                       &view_configuration_count,
-                                                       nullptr));
-            m_data->view_configurations.resize(view_configuration_count, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
-            m_data->views.resize(view_configuration_count, {XR_TYPE_VIEW});
-            xr_check(xrEnumerateViewConfigurationViews(m_data->instance,
-                                                       m_data->system_id,
-                                                       VIEW_CONFIGURATION_TYPE,
-                                                       view_configuration_count,
-                                                       &view_configuration_count,
-                                                       m_data->view_configurations.data()));
-
-            // Create the swapchains
-            for (uint32_t view_i = 0; view_i < view_configuration_count; view_i++)
-            {
-                XrSwapchainCreateInfo swapchain_create_info {
-                    .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-                    .next = XR_NULL_HANDLE,
-                    .createFlags = 0,
-                    .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-                    .format = XR_FORMAT_R8G8B8A8_UNORM_SRGB,
-                }
-            }
-        }
     }
 
-#ifdef RENDERER_VULKAN
-
-    VulkanCompatibility XrSystem::get_vulkan_compatibility() const
-    {
-        XrGraphicsRequirementsVulkanKHR requirements {
-            .type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR,
-            .next = XR_NULL_HANDLE,
-        };
-        xr_check(xrGetVulkanGraphicsRequirements2KHR(m_data->instance, m_data->system_id, &requirements),
-                 "Failed to get Vulkan requirements");
-
-        return VulkanCompatibility {
-            .min_version = make_version(requirements.minApiVersionSupported),
-            .max_version = make_version(requirements.maxApiVersionSupported),
-        };
-    }
-
-    int XrSystem::create_vulkan_instance(const VkInstanceCreateInfo &create_info,
-                                         PFN_vkGetInstanceProcAddr   vk_get_instance_proc_addr,
-                                         VkInstance                 &out_instance) const
-    {
-        XrVulkanInstanceCreateInfoKHR vulkan_instance_create_info {XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
-        vulkan_instance_create_info.systemId               = m_data->system_id;
-        vulkan_instance_create_info.pfnGetInstanceProcAddr = vk_get_instance_proc_addr;
-        vulkan_instance_create_info.vulkanCreateInfo       = &create_info;
-
-        // Create instance
-        VkResult result;
-        xr_check(xrCreateVulkanInstanceKHR(m_data->instance, &vulkan_instance_create_info, &out_instance, &result),
-                 "Failed to create Vulkan instance");
-        m_data->graphics_binding.instance = out_instance;
-        return result;
-    }
-
-    VkPhysicalDevice XrSystem::get_vulkan_physical_device() const
-    {
-        if (!m_data)
-        {
-            throw std::runtime_error("XrManager not initialized");
-        }
-
-        // Find physical device
-        VkPhysicalDevice physical_device = VK_NULL_HANDLE;
-
-        XrVulkanGraphicsDeviceGetInfoKHR graphics_device_get_info {
-            .type           = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR,
-            .next           = XR_NULL_HANDLE,
-            .systemId       = m_data->system_id,
-            .vulkanInstance = m_data->graphics_binding.instance,
-        };
-
-        xr_check(xrGetVulkanGraphicsDevice2KHR(m_data->instance, &graphics_device_get_info, &physical_device),
-                 "Failed to get Vulkan graphics device");
-
-        m_data->graphics_binding.physicalDevice = physical_device;
-
-        return physical_device;
-    }
-
-    int XrSystem::create_vulkan_device(const VkDeviceCreateInfo &create_info,
-                                       PFN_vkGetInstanceProcAddr vk_get_instance_proc_addr,
-                                       VkDevice                 &out_device) const
-    {
-        XrVulkanDeviceCreateInfoKHR vulkan_device_create_info {
-            .type                   = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
-            .next                   = XR_NULL_HANDLE,
-            .systemId               = m_data->system_id,
-            .pfnGetInstanceProcAddr = vk_get_instance_proc_addr,
-            .vulkanPhysicalDevice   = m_data->graphics_binding.physicalDevice,
-            .vulkanCreateInfo       = &create_info,
-        };
-
-        // Create device
-        VkResult result;
-        xr_check(xrCreateVulkanDeviceKHR(m_data->instance, &vulkan_device_create_info, &out_device, &result),
-                 "Failed to create Vulkan device");
-        m_data->graphics_binding.device = out_device;
-
-        return result;
-    }
-
-    void XrSystem::register_graphics_queue(uint32_t queue_family, uint32_t queue_index) const
-    {
-        m_data->graphics_binding.queueFamilyIndex = queue_family;
-        m_data->graphics_binding.queueIndex       = queue_index;
-    }
-#endif
+    // endregion
 } // namespace xre
-
-#endif

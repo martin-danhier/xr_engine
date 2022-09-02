@@ -1,17 +1,15 @@
 #ifdef RENDERER_VULKAN
+#include "xr_engine/core/xr_renderer.h"
 
-#include "xr_engine/core/renderer.h"
-
-#include <algorithm>
-#include <utility>
-#include <vector>
 #include <volk.h>
 #include <xr_engine/core/global.h>
 #include <xr_engine/core/window.h>
 #include <xr_engine/core/xr/xr_system.h>
 #include <xr_engine/utils/global_utils.h>
+#include <xr_engine/utils/openxr_utils.h>
 
 // Needs to be after volk.h
+#include <openxr/openxr_platform.h>
 #include <vk_mem_alloc.h>
 
 // Check dependencies versions
@@ -23,9 +21,16 @@
 
 namespace xre
 {
-    // --=== Structs ===--
+    // --=== Function pointers ===--
 
-    // Allocator
+    PFN_xrGetVulkanGraphicsRequirements2KHR xrGetVulkanGraphicsRequirements2KHR = nullptr;
+    PFN_xrGetVulkanGraphicsDevice2KHR       xrGetVulkanGraphicsDevice2KHR       = nullptr;
+    PFN_xrCreateVulkanInstanceKHR           xrCreateVulkanInstanceKHR           = nullptr;
+    PFN_xrCreateVulkanDeviceKHR             xrCreateVulkanDeviceKHR             = nullptr;
+
+    // --=== Structs ===---
+
+    // region Allocator
 
     struct AllocatedBuffer
     {
@@ -82,6 +87,7 @@ namespace xre
         void                         *map_buffer(AllocatedBuffer &buffer) const;
         void                          unmap_buffer(AllocatedBuffer &buffer) const;
     };
+    // endregion
 
     struct Queue
     {
@@ -89,25 +95,30 @@ namespace xre
         VkQueue  queue        = VK_NULL_HANDLE;
     };
 
-    struct Renderer::Data
+    struct XrRenderer::Data
     {
-        uint8_t reference_count = 0;
+        uint8_t  reference_count = 0;
+        XrSystem xr_system       = {};
+        Window   mirror_window   = {};
 
-        Window   mirror_window = {};
-        XrSystem xr_system     = {};
-
-        VkInstance instance = VK_NULL_HANDLE;
-        VkDevice   device   = VK_NULL_HANDLE;
+        // Vulkan core
+        VkInstance                 vk_instance       = VK_NULL_HANDLE;
+        VkDevice                   device            = VK_NULL_HANDLE;
+        VkPhysicalDevice           physical_device   = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties device_properties = {};
 #ifdef USE_VK_VALIDATION_LAYERS
         VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 #endif
-        VkPhysicalDevice           physical_device   = VK_NULL_HANDLE;
-        VkPhysicalDeviceProperties device_properties = {};
-        Allocator                  allocator         = {};
+        Allocator allocator = {};
 
         // Queues
         Queue graphics_queue = {};
         Queue transfer_queue = {};
+
+        // XR
+        XrGraphicsBindingVulkan2KHR graphics_binding = {};
+        std::vector<XrViewConfigurationView> view_configurations;
+        std::vector<XrView>                  views;
 
         // --- Methods ---
         template<typename T>
@@ -119,7 +130,6 @@ namespace xre
 
     namespace renderer
     {
-
         // region Checks and string conversions
 
         std::string vk_result_to_string(VkResult result)
@@ -146,13 +156,6 @@ namespace xre
                 case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO Relaxed";
                 default: return std::to_string(present_mode);
             }
-        }
-
-        Version make_version(const int &version)
-        {
-            return Version {static_cast<uint8_t>(VK_API_VERSION_MAJOR(version)),
-                            static_cast<uint8_t>(VK_API_VERSION_MINOR(version)),
-                            static_cast<uint16_t>(VK_API_VERSION_PATCH(version))};
         }
 
         void vk_check(VkResult result, const std::string &error_message = "")
@@ -346,7 +349,6 @@ namespace xre
         // endregion
 
     } // namespace renderer
-
     using namespace renderer;
 
     // region Allocator
@@ -593,7 +595,7 @@ namespace xre
     }
 
     template<typename T>
-    void Renderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset)
+    void XrRenderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset)
     {
         // Copy the data to the GPU
         char *data = static_cast<char *>(allocator.map_buffer(dst));
@@ -608,7 +610,7 @@ namespace xre
         allocator.unmap_buffer(dst);
     }
 
-    size_t Renderer::Data::pad_uniform_buffer_size(size_t original_size) const
+    size_t XrRenderer::Data::pad_uniform_buffer_size(size_t original_size) const
     {
         // Get the alignment requirement
         const size_t &min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
@@ -624,30 +626,54 @@ namespace xre
 
     // --=== API ===--
 
-    Renderer::Renderer(const XrSystem &target_xr_system, const Settings &settings, Window mirror_window)
-    {
-        // Init data
-        m_data = new Data {
-            .reference_count = 1,
-            .mirror_window   = std::move(mirror_window),
-            .xr_system       = target_xr_system,
-        };
+    // region Init and shared pointer logic
 
-        // -- Init Vulkan --
+    XrRenderer::XrRenderer(const XrSystem &parent, const Settings &settings, Window *mirror_window) : m_data(new Data)
+    {
+        check(parent.is_valid(), "Invalid XrSystem. Unable to create XrRenderer");
+
+        m_data->reference_count = 1;
+        m_data->xr_system       = parent;
+        if (mirror_window)
+        {
+            m_data->mirror_window = *mirror_window;
+        }
+        XrInstance xr_instance  = parent.instance();
+        XrSystemId xr_system_id = parent.system_id();
+
+        // Load XR functions
+        xr_check(xrGetInstanceProcAddr(xr_instance,
+                                       "xrGetVulkanGraphicsDevice2KHR",
+                                       reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsDevice2KHR)),
+                 "Failed to load xrGetVulkanGraphicsDevice2KHR");
+        xr_check(xrGetInstanceProcAddr(xr_instance,
+                                       "xrCreateVulkanInstanceKHR",
+                                       reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanInstanceKHR)),
+                 "Failed to load xrCreateVulkanInstanceKHR");
+        xr_check(xrGetInstanceProcAddr(xr_instance,
+                                       "xrCreateVulkanDeviceKHR",
+                                       reinterpret_cast<PFN_xrVoidFunction *>(&xrCreateVulkanDeviceKHR)),
+                 "Failed to load xrCreateVulkanDeviceKHR");
+        xr_check(xrGetInstanceProcAddr(xr_instance,
+                                       "xrGetVulkanGraphicsRequirements2KHR",
+                                       reinterpret_cast<PFN_xrVoidFunction *>(&xrGetVulkanGraphicsRequirements2KHR)),
+                 "Failed to load xrGetVulkanGraphicsRequirements2KHR");
 
         // Get requirements
-        auto requirements = m_data->xr_system.get_vulkan_compatibility();
-        auto vulkan_version      = VK_MAKE_VERSION(requirements.max_version.major, requirements.max_version.minor, 0);
+        XrGraphicsRequirementsVulkanKHR graphics_requirements = {};
+        graphics_requirements.type                            = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR;
+        xr_check(xrGetVulkanGraphicsRequirements2KHR(xr_instance, xr_system_id, &graphics_requirements),
+                 "Failed to get graphics requirements");
 
-        std::cout << "Using Vulkan backend, version " << requirements.max_version << "\n";
+        auto vk_version = VK_MAKE_VERSION(XR_VERSION_MAJOR(graphics_requirements.maxApiVersionSupported),
+                                          XR_VERSION_MINOR(graphics_requirements.maxApiVersionSupported),
+                                          0);
+        std::cout << "Using Vulkan backend, version " << make_version(graphics_requirements.maxApiVersionSupported) << "\n";
 
         // Initialize volk
         vk_check(volkInitialize(), "Couldn't initialize Volk.");
 
-        // --=== Instance creation ===--
-
         // region Instance creation
-        // Do it in a sub scope to call destructors earlier
         {
             // Set required extensions
             uint32_t extra_extension_count = 0;
@@ -675,7 +701,7 @@ namespace xre
             check(check_layer_support(enabled_layers), "Vulkan validation layers requested, but not available.");
 #endif
 
-            VkApplicationInfo applicationInfo = {
+            VkApplicationInfo application_info = {
                 // Struct infos
                 .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                 .pNext = VK_NULL_HANDLE,
@@ -687,15 +713,15 @@ namespace xre
                 // Engine infos
                 .pEngineName   = ENGINE_NAME,
                 .engineVersion = VK_MAKE_VERSION(ENGINE_VERSION.major, ENGINE_VERSION.minor, ENGINE_VERSION.patch),
-                .apiVersion    = vulkan_version,
+                .apiVersion    = vk_version,
             };
 
-            VkInstanceCreateInfo instanceCreateInfo {
+            VkInstanceCreateInfo vk_instance_create_info {
                 // Struct infos
                 .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                 .pNext = VK_NULL_HANDLE,
                 // App info
-                .pApplicationInfo = &applicationInfo,
+                .pApplicationInfo = &application_info,
             // Validation layers
 #ifdef USE_VK_VALIDATION_LAYERS
                 .enabledLayerCount   = static_cast<uint32_t>(enabled_layers.size()),
@@ -709,12 +735,19 @@ namespace xre
                 .ppEnabledExtensionNames = required_extensions.data(),
             };
 
-            vk_check(static_cast<VkResult>(
-                         m_data->xr_system.create_vulkan_instance(instanceCreateInfo, vkGetInstanceProcAddr, m_data->instance)),
-                     "Couldn't create instance.");
+            XrVulkanInstanceCreateInfoKHR vulkan_instance_create_info {XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
+            vulkan_instance_create_info.systemId               = xr_system_id;
+            vulkan_instance_create_info.pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
+            vulkan_instance_create_info.vulkanCreateInfo       = &vk_instance_create_info;
+
+            // Create instance
+            VkResult result;
+            xr_check(xrCreateVulkanInstanceKHR(xr_instance, &vulkan_instance_create_info, &m_data->vk_instance, &result),
+                     "Failed to create Vulkan instance");
+            vk_check(result);
 
             // Register instance in Volk
-            volkLoadInstance(m_data->instance);
+            volkLoadInstance(m_data->vk_instance);
 
             // Create debug messenger
 #ifdef USE_VK_VALIDATION_LAYERS
@@ -729,8 +762,9 @@ namespace xre
                 // Callback
                 .pfnUserCallback = static_cast<PFN_vkDebugUtilsMessengerCallbackEXT>(debug_messenger_callback),
             };
-            vk_check(vkCreateDebugUtilsMessengerEXT(m_data->instance, &debug_messenger_create_info, nullptr, &m_data->debug_messenger),
-                     "Couldn't create debug messenger");
+            vk_check(
+                vkCreateDebugUtilsMessengerEXT(m_data->vk_instance, &debug_messenger_create_info, nullptr, &m_data->debug_messenger),
+                "Couldn't create debug messenger");
 #endif
         }
         // endregion
@@ -738,15 +772,22 @@ namespace xre
         // --=== Physical device and queue families selection ===--
 
         // region Physical device and queue families selection
-
         {
-            // Get physical device
-            m_data->physical_device = m_data->xr_system.get_vulkan_physical_device();
+            // Find physical device
+            XrVulkanGraphicsDeviceGetInfoKHR graphics_device_get_info {
+                .type           = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR,
+                .next           = XR_NULL_HANDLE,
+                .systemId       = xr_system_id,
+                .vulkanInstance = m_data->vk_instance,
+            };
+
+            xr_check(xrGetVulkanGraphicsDevice2KHR(xr_instance, &graphics_device_get_info, &m_data->physical_device),
+                     "Failed to get Vulkan graphics device");
 
             // Log chosen GPU
             VkPhysicalDeviceProperties physical_device_properties;
             vkGetPhysicalDeviceProperties(m_data->physical_device, &physical_device_properties);
-            printf("Suitable GPU found: %s\n", physical_device_properties.deviceName);
+            std::cout << "Suitable GPU found: " << physical_device_properties.deviceName << std::endl;
 
             // Get queue families
             uint32_t queue_family_properties_count = 0;
@@ -807,7 +848,6 @@ namespace xre
             // Get GPU properties
             vkGetPhysicalDeviceProperties(m_data->physical_device, &m_data->device_properties);
         }
-
         // endregion
 
         // --=== Logical device and queues creation ===--
@@ -865,7 +905,7 @@ namespace xre
             VkPhysicalDeviceFeatures features      = {};
             features.shaderStorageImageMultisample = VK_TRUE;
 
-            VkDeviceCreateInfo device_create_info = {
+            VkDeviceCreateInfo vk_device_create_info = {
                 // Struct infos
                 .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                 .pNext = nullptr,
@@ -880,9 +920,21 @@ namespace xre
                 .ppEnabledExtensionNames = required_device_extensions.data(),
                 .pEnabledFeatures        = &features,
             };
-            vk_check(static_cast<VkResult>(
-                         m_data->xr_system.create_vulkan_device(device_create_info, vkGetInstanceProcAddr, m_data->device)),
-                     "Couldn't create logical device.");
+
+            XrVulkanDeviceCreateInfoKHR device_create_info {
+                .type                   = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
+                .next                   = XR_NULL_HANDLE,
+                .systemId               = xr_system_id,
+                .pfnGetInstanceProcAddr = vkGetInstanceProcAddr,
+                .vulkanPhysicalDevice   = m_data->physical_device,
+                .vulkanCreateInfo       = &vk_device_create_info,
+            };
+
+            // Create device
+            VkResult result;
+            xr_check(xrCreateVulkanDeviceKHR(xr_instance, &device_create_info, &m_data->device, &result),
+                     "Failed to create Vulkan device");
+            vk_check(result);
 
             // Load device in volk
             volkLoadDevice(m_data->device);
@@ -906,7 +958,7 @@ namespace xre
 
         // --=== Allocator ===--
 
-        m_data->allocator = std::move(Allocator(m_data->instance,
+        m_data->allocator = std::move(Allocator(m_data->vk_instance,
                                                 m_data->device,
                                                 m_data->physical_device,
                                                 m_data->graphics_queue.family_index,
@@ -914,54 +966,74 @@ namespace xre
 
         // --=== XR ===--
 
-        // Tell XR which queues we will use
-        m_data->xr_system.register_graphics_queue(m_data->graphics_queue.family_index, 0);
+        // Create graphics binding
+        m_data->graphics_binding = XrGraphicsBindingVulkanKHR {
+            .type             = XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR,
+            .next             = XR_NULL_HANDLE,
+            .instance         = m_data->vk_instance,
+            .physicalDevice   = m_data->physical_device,
+            .device           = m_data->device,
+            .queueFamilyIndex = m_data->graphics_queue.family_index,
+            .queueIndex       = 0,
+        };
 
-        // Signal XR that it can finish the initialization
-        m_data->xr_system.finish_setup();
+        // Finish setup and create the session
+        parent.finish_setup(&m_data->graphics_binding);
     }
 
-    Renderer::Renderer(const Renderer &other) : m_data(other.m_data)
+    XrRenderer::XrRenderer(const XrRenderer &other)
     {
+        // Copy data
+        m_data = other.m_data;
+
         // Increase reference count
         m_data->reference_count++;
     }
 
-    Renderer::Renderer(Renderer &&other) noexcept : m_data(other.m_data)
+    XrRenderer::XrRenderer(XrRenderer &&other) noexcept
     {
-        // Take other's data
+        // Move data
+        m_data = other.m_data;
+
+        // Reset other data
         other.m_data = nullptr;
     }
 
-    Renderer &Renderer::operator=(const Renderer &other)
+    XrRenderer &XrRenderer::operator=(const XrRenderer &other)
     {
-        if (this != &other)
+        if (this == &other)
         {
-            // Call destructor
-            this->~Renderer();
-
-            // Copy data
-            m_data = other.m_data;
-            m_data->reference_count++;
+            return *this;
         }
+
+        // Call destructor
+        this->~XrRenderer();
+
+        // Copy data
+        m_data = other.m_data;
+        m_data->reference_count++;
+
         return *this;
     }
 
-    Renderer &Renderer::operator=(Renderer &&other) noexcept
+    XrRenderer &XrRenderer::operator=(XrRenderer &&other) noexcept
     {
-        if (this != &other)
+        if (this == &other)
         {
-            // Call destructor
-            this->~Renderer();
-
-            // Take other's data
-            m_data       = other.m_data;
-            other.m_data = nullptr;
+            return *this;
         }
+
+        // Call destructor
+        this->~XrRenderer();
+
+        // Move data
+        m_data       = other.m_data;
+        other.m_data = nullptr;
+
         return *this;
     }
 
-    Renderer::~Renderer()
+    XrRenderer::~XrRenderer()
     {
         if (m_data)
         {
@@ -979,15 +1051,12 @@ namespace xre
                 // Destroy allocator
                 m_data->allocator.~Allocator();
 
-                // Destroy device
                 vkDestroyDevice(m_data->device, nullptr);
 
 #ifdef USE_VK_VALIDATION_LAYERS
-                // Destroy debug messenger
-                vkDestroyDebugUtilsMessengerEXT(m_data->instance, m_data->debug_messenger, nullptr);
+                vkDestroyDebugUtilsMessengerEXT(m_data->vk_instance, m_data->debug_messenger, nullptr);
 #endif
-                // Destroy instance
-                vkDestroyInstance(m_data->instance, nullptr);
+                vkDestroyInstance(m_data->vk_instance, nullptr);
 
                 delete m_data;
             }
@@ -996,6 +1065,22 @@ namespace xre
         }
     }
 
-} // namespace xre
+    // endregion
 
+    // region OpenXR API
+
+    const char *XrRenderer::get_required_openxr_extension()
+    {
+        return XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
+    }
+
+    void *XrRenderer::graphics_binding() const
+    {
+        check(m_data, "Invalid renderer");
+        return &m_data->graphics_binding;
+    }
+
+    // endregion
+
+} // namespace xre
 #endif

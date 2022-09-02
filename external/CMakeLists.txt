@@ -86,36 +86,26 @@ target_sources(testing_framework PRIVATE
         )
 target_include_directories(testing_framework PUBLIC testing_framework)
 
-##################################################################
-###                           JSONCPP                          ###
-##################################################################
-
-if (DEFINED XR_OPENXR)
-endif()
 
 ##################################################################
 ###                           OPEN XR                          ###
 ##################################################################
 
-if (DEFINED XR_OPENXR)
+add_library(openxr INTERFACE)
 
+# Debug mode
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_subdirectory(OpenXR-SDK-Source)
+    # Set environment variable XR_API_LAYER_PATH  to (build)/src/api_layers
+    set($ENV{XR_API_LAYER_PATH} ${CMAKE_CURRENT_BINARY_DIR}/OpenXR-SDK-Source/src/api_layers)
 
-    add_library(openxr INTERFACE)
-
-    # Debug mode
-    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_subdirectory(OpenXR-SDK-Source)
-        # Set environment variable XR_API_LAYER_PATH  to (build)/src/api_layers
-        set($ENV{XR_API_LAYER_PATH} ${CMAKE_CURRENT_BINARY_DIR}/OpenXR-SDK-Source/src/api_layers)
-
-        target_link_libraries(openxr INTERFACE XrApiLayer_core_validation)
-    else()
-        add_subdirectory(OpenXR-SDK)
-    endif()
-
-    target_include_directories(openxr INTERFACE OpenXR-SDK/include)
-    target_link_libraries(openxr INTERFACE openxr_loader)
+    target_link_libraries(openxr INTERFACE XrApiLayer_core_validation)
+else()
+    add_subdirectory(OpenXR-SDK)
 endif()
+
+target_include_directories(openxr INTERFACE OpenXR-SDK/include)
+target_link_libraries(openxr INTERFACE openxr_loader)
 
 ##################################################################
 ###                       VULKAN-MEM-ALLOC                     ###
