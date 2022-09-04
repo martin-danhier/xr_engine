@@ -163,12 +163,18 @@ else ()
     )
 endif ()
 
+# Get all files in include so that they appear in IDEs
+file(GLOB_RECURSE vr_engine_lib_headers
+        "include/*.h"
+        "include/*.hpp"
+        )
+
 ##################################################################
 ###                         CREATE LIB                         ###
 ##################################################################
 
 # Create main lib
-add_library(vr_engine_lib STATIC ${vr_engine_lib_sources})
+add_library(vr_engine_lib STATIC ${vr_engine_lib_sources} ${vr_engine_lib_headers})
 target_sources(vr_engine_lib PRIVATE ${vr_engine_lib_sources})
 target_include_directories(vr_engine_lib PUBLIC ${vr_engine_lib_header_dir})
 

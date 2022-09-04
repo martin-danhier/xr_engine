@@ -1,7 +1,5 @@
 #pragma once
 
-#include "vr_engine/core/vr_renderer.h"
-
 #include <cstdint>
 
 // OpenXR forward declarations
@@ -12,6 +10,7 @@ namespace vre
 {
     struct Settings;
     class VrRenderer;
+    class Window;
     class VrSystem
     {
       private:
@@ -30,17 +29,9 @@ namespace vre
             return m_data != nullptr;
         }
 
-        VrRenderer create_renderer(const Settings &settings, Window *mirror_window = nullptr);
+        void create_renderer(const Settings &settings, Window *mirror_window = nullptr);
 
         ~VrSystem();
-      private:
-        friend VrRenderer;
-
-        [[nodiscard]] XrInstance instance() const;
-        [[nodiscard]] XrSystemId system_id() const;
-
-        void finish_setup(void *graphics_binding) const;
-
     };
 
 } // namespace vre

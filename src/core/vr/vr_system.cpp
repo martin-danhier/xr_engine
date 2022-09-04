@@ -2,7 +2,7 @@
 
 #include <vector>
 #include <vr_engine/core/global.h>
-#include <vr_engine/core/vr_renderer.h>
+#include <vr_engine/core/vr/vr_renderer.h>
 #include <vr_engine/utils/global_utils.h>
 #include <vr_engine/utils/openxr_utils.h>
 
@@ -15,7 +15,6 @@ namespace vre
 {
     // ---=== Constants ===---
 
-#define VIEW_CONFIGURATION_TYPE XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
 #define FORM_FACTOR             XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY
 
     constexpr XrPosef XR_POSE_IDENTITY = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
@@ -31,8 +30,8 @@ namespace vre
 
     struct VrSystem::Data
     {
-        uint8_t reference_count = 0;
-        VrRenderer renderer     = {};
+        uint8_t    reference_count = 0;
+        VrRenderer renderer        = {};
 
         XrInstance instance = XR_NULL_HANDLE;
 #ifdef USE_OPENXR_VALIDATION_LAYERS
@@ -410,6 +409,11 @@ namespace vre
 
             if (m_data->reference_count == 0)
             {
+                if (m_data->renderer.is_valid()) {
+                    m_data->renderer.wait_idle();
+                    m_data->renderer.cleanup_vr_views();
+                }
+
                 if (m_data->reference_space != XR_NULL_HANDLE)
                 {
                     xr_check(xrDestroySpace(m_data->reference_space), "Failed to destroy reference space");
@@ -438,35 +442,23 @@ namespace vre
         }
     }
 
+    // --=== Friend API ===--
+
     // region Friend API
 
-    XrInstance VrSystem::instance() const
-    {
-        return m_data->instance;
-    }
-
-    XrSystemId VrSystem::system_id() const
-    {
-        return m_data->system_id;
-    }
-
-    VrRenderer VrSystem::create_renderer(const Settings &settings, Window *mirror_window)
+    void VrSystem::create_renderer(const Settings &settings, Window *mirror_window)
     {
         check(!m_data->renderer.is_valid(), "Renderer already created");
-        m_data->renderer = {*this, settings, mirror_window};
-        return m_data->renderer;
-    }
+        m_data->renderer = VrRenderer(m_data->instance, m_data->system_id, settings, mirror_window);
 
-    void VrSystem::finish_setup(void *graphics_binding) const
-    {
         // Create session
         {
             XrSessionCreateInfo session_create_info {
                 .type = XR_TYPE_SESSION_CREATE_INFO,
                 // We need to give the binding so that OpenXR knows about our Vulkan setup
-                .next = graphics_binding,
+                .next        = m_data->renderer.graphics_binding(),
                 .createFlags = 0,
-                .systemId = m_data->system_id,
+                .systemId    = m_data->system_id,
             };
             xr_check(xrCreateSession(m_data->instance, &session_create_info, &m_data->session),
                      "Failed to create session. Is the headset plugged in?");
@@ -490,7 +482,8 @@ namespace vre
                      "Failed to create reference space");
         }
 
-
+        // Init VR views (swapchains)
+        m_data->renderer.init_vr_views(m_data->session);
     }
 
     // endregion

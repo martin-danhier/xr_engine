@@ -1,10 +1,10 @@
 #ifdef RENDERER_VULKAN
-#include "vr_engine/core/vr_renderer.h"
+#include "vr_engine/core/vr/vr_renderer.h"
 
 #include <volk.h>
 #include <vr_engine/core/global.h>
-#include <vr_engine/core/window.h>
 #include <vr_engine/core/vr/vr_system.h>
+#include <vr_engine/core/window.h>
 #include <vr_engine/utils/global_utils.h>
 #include <vr_engine/utils/openxr_utils.h>
 
@@ -27,6 +27,10 @@ namespace vre
     PFN_xrGetVulkanGraphicsDevice2KHR       xrGetVulkanGraphicsDevice2KHR       = nullptr;
     PFN_xrCreateVulkanInstanceKHR           xrCreateVulkanInstanceKHR           = nullptr;
     PFN_xrCreateVulkanDeviceKHR             xrCreateVulkanDeviceKHR             = nullptr;
+
+    // --=== Defines ===--
+
+#define VIEW_CONFIGURATION_TYPE XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
 
     // --=== Structs ===---
 
@@ -89,11 +93,16 @@ namespace vre
     };
     // endregion
 
-    struct VrRenderTarget
+    /** A VR system has several "views" (typically left and right eyes) that can be rendered to. */
+    struct VrView
     {
-        XrViewConfigurationView view_config  = {};
-        XrView                  view         = {};
-        XrSwapchain             xr_swapchain = XR_NULL_HANDLE;
+        XrViewConfigurationView  view_config           = {};
+        XrView                   view                  = {};
+        XrSwapchain              xr_swapchain          = XR_NULL_HANDLE;
+        VkExtent2D               swapchain_extent      = {};
+        uint32_t                 nb_swapchain_images   = 0;
+        std::vector<VkImage>     swapchain_images      = {};
+        std::vector<VkImageView> swapchain_image_views = {};
     };
 
     struct Queue
@@ -104,9 +113,8 @@ namespace vre
 
     struct VrRenderer::Data
     {
-        uint8_t  reference_count = 0;
-        VrSystem xr_system       = {};
-        Window   mirror_window   = {};
+        uint8_t reference_count = 0;
+        Window  mirror_window   = {};
 
         // Vulkan core
         VkInstance                 vk_instance       = VK_NULL_HANDLE;
@@ -116,15 +124,18 @@ namespace vre
 #ifdef USE_VK_VALIDATION_LAYERS
         VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 #endif
-        Allocator allocator = {};
+        Allocator allocator           = {};
+        VkFormat  xr_swapchain_format = VK_FORMAT_UNDEFINED;
 
         // Queues
         Queue graphics_queue = {};
         Queue transfer_queue = {};
 
         // XR
-        XrGraphicsBindingVulkan2KHR          graphics_binding = {};
-        std::vector<VrRenderTarget>          render_targets   = {};
+        XrInstance                  xr_instance      = XR_NULL_HANDLE;
+        XrSystemId                  system_id        = XR_NULL_SYSTEM_ID;
+        XrGraphicsBindingVulkan2KHR graphics_binding = {};
+        std::vector<VrView>         views            = {};
 
         // --- Methods ---
         template<typename T>
@@ -350,6 +361,42 @@ namespace vre
             output << "[Vulkan " << str_severity << ": " << str_type << "]\n" << callback_data->pMessage << "\n";
 
             return VK_FALSE;
+        }
+
+        // endregion
+
+        // region Views
+
+        VkFormat choose_swapchain_format(XrSession session)
+        {
+            // Get the list of available formats
+            uint32_t nb_available_formats = 0;
+            xr_check(xrEnumerateSwapchainFormats(session, 0, &nb_available_formats, nullptr));
+            std::vector<int64_t> available_formats(nb_available_formats);
+            xr_check(xrEnumerateSwapchainFormats(session, nb_available_formats, &nb_available_formats, available_formats.data()));
+
+            // Define preferences
+            constexpr VkFormat format_priorities[] {
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_R8G8B8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_UNORM,
+                VK_FORMAT_R8G8B8A8_UNORM,
+            };
+
+            // Find the first format in the priorities that is available
+            for (const auto &format : format_priorities)
+            {
+                for (const auto &available_format : available_formats)
+                {
+                    if (available_format == format)
+                    {
+                        return format;
+                    }
+                }
+            }
+
+            // No format supported
+            throw std::runtime_error("No swapchain format supported");
         }
 
         // endregion
@@ -634,18 +681,17 @@ namespace vre
 
     // region Init and shared pointer logic
 
-    VrRenderer::VrRenderer(const VrSystem &parent, const Settings &settings, Window *mirror_window) : m_data(new Data)
+    VrRenderer::VrRenderer(XrInstance xr_instance, XrSystemId xr_system_id, const Settings &settings, Window *mirror_window)
+        : m_data(new Data)
     {
-        check(parent.is_valid(), "Invalid XrSystem. Unable to create XrRenderer");
-
         m_data->reference_count = 1;
-        m_data->xr_system       = parent;
         if (mirror_window)
         {
             m_data->mirror_window = *mirror_window;
         }
-        XrInstance xr_instance  = parent.instance();
-        XrSystemId xr_system_id = parent.system_id();
+
+        m_data->xr_instance = xr_instance;
+        m_data->system_id   = xr_system_id;
 
         // Load XR functions
         xr_check(xrGetInstanceProcAddr(xr_instance,
@@ -982,9 +1028,6 @@ namespace vre
             .queueFamilyIndex = m_data->graphics_queue.family_index,
             .queueIndex       = 0,
         };
-
-        // Finish setup and create the session
-        parent.finish_setup(&m_data->graphics_binding);
     }
 
     VrRenderer::VrRenderer(const VrRenderer &other)
@@ -1047,13 +1090,6 @@ namespace vre
 
             if (m_data->reference_count == 0)
             {
-                // Wait
-                vk_check(vkDeviceWaitIdle(m_data->device), "Failed to wait for device to become idle");
-
-                // Destroy XR system, so that it releases its Vulkan resources
-                m_data->xr_system.~VrSystem();
-                m_data->xr_system = {};
-
                 // Destroy allocator
                 m_data->allocator.~Allocator();
 
@@ -1084,6 +1120,128 @@ namespace vre
     {
         check(m_data, "Invalid renderer");
         return &m_data->graphics_binding;
+    }
+
+    void VrRenderer::init_vr_views(XrSession session) const
+    {
+        // Choose swapchain format
+        m_data->xr_swapchain_format = choose_swapchain_format(session);
+
+        // List available views
+        uint32_t nb_views = 0;
+        xr_check(
+            xrEnumerateViewConfigurationViews(m_data->xr_instance, m_data->system_id, VIEW_CONFIGURATION_TYPE, 0, &nb_views, nullptr));
+        std::vector<XrViewConfigurationView> view_configs(nb_views, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+        xr_check(xrEnumerateViewConfigurationViews(m_data->xr_instance,
+                                                   m_data->system_id,
+                                                   VIEW_CONFIGURATION_TYPE,
+                                                   nb_views,
+                                                   &nb_views,
+                                                   view_configs.data()));
+
+        // Init view array
+        m_data->views.reserve(nb_views);
+
+        // Init create infos that can be reused
+        XrSwapchainCreateInfo swapchain_create_info {
+            .type        = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .next        = nullptr,
+            .createFlags = 0,
+            .usageFlags  = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+            .format      = m_data->xr_swapchain_format,
+            .faceCount   = 1, // Not a cube map, 1 face
+            .arraySize   = 1, // Not an array texture, 1 layer
+            .mipCount    = 1, // No mipmaps
+        };
+
+        VkImageViewCreateInfo image_view_create_info {
+            .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext    = nullptr,
+            .flags    = 0,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format   = m_data->xr_swapchain_format,
+            .components =
+                {
+                    .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+            .subresourceRange =
+                {
+                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel   = 0,
+                    .levelCount     = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount     = 1,
+                },
+        };
+
+        for (uint32_t view_i = 0; view_i < nb_views; view_i++)
+        {
+            VrView view = {
+                .view_config = view_configs[view_i],
+                .view        = {XR_TYPE_VIEW},
+            };
+            view.swapchain_extent = {view.view_config.recommendedImageRectWidth, view.view_config.recommendedImageRectHeight};
+
+            // Update create info for this view
+            swapchain_create_info.width       = view.swapchain_extent.width;
+            swapchain_create_info.height      = view.swapchain_extent.height;
+            swapchain_create_info.sampleCount = view.view_config.recommendedSwapchainSampleCount;
+
+            // Create swapchain
+            xr_check(xrCreateSwapchain(session, &swapchain_create_info, &view.xr_swapchain), "Failed to create OpenXR swapchain");
+
+            // Get swapchain images
+            view.nb_swapchain_images = 0;
+            xr_check(xrEnumerateSwapchainImages(view.xr_swapchain, 0, &view.nb_swapchain_images, nullptr));
+            std::vector<XrSwapchainImageVulkan2KHR> xr_images(view.nb_swapchain_images, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+            xr_check(xrEnumerateSwapchainImages(view.xr_swapchain,
+                                                view.nb_swapchain_images,
+                                                &view.nb_swapchain_images,
+                                                reinterpret_cast<XrSwapchainImageBaseHeader *>(xr_images.data())));
+
+            // Get Vulkan images and views
+            view.swapchain_images.reserve(view.nb_swapchain_images);
+            view.swapchain_image_views.reserve(view.nb_swapchain_images);
+            for (auto image : xr_images)
+            {
+                view.swapchain_images.push_back(image.image);
+
+                image_view_create_info.image = image.image;
+                VkImageView image_view;
+                vk_check(vkCreateImageView(m_data->device, &image_view_create_info, nullptr, &image_view),
+                         "Failed to create Vulkan image view for swapchain image");
+                view.swapchain_image_views.push_back(image_view);
+            }
+
+            // Save
+            m_data->views.push_back(view);
+        }
+    }
+
+    void VrRenderer::wait_idle() const
+    {
+        // Wait
+        vk_check(vkDeviceWaitIdle(m_data->device), "Failed to wait for device to become idle");
+    }
+
+    void VrRenderer::cleanup_vr_views() const
+    {
+        for (VrView &view : m_data->views)
+        {
+            for (VkImageView image_view : view.swapchain_image_views)
+            {
+                vkDestroyImageView(m_data->device, image_view, nullptr);
+            }
+
+            if (view.xr_swapchain)
+            {
+                xr_check(xrDestroySwapchain(view.xr_swapchain), "Failed to destroy OpenXR swapchain");
+                view.xr_swapchain = XR_NULL_HANDLE;
+            }
+        }
     }
 
     // endregion

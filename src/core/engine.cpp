@@ -2,9 +2,8 @@
 
 #include <algorithm>
 #include <vr_engine/core/global.h>
-#include <vr_engine/core/vr_renderer.h>
-#include <vr_engine/core/window.h>
 #include <vr_engine/core/vr/vr_system.h>
+#include <vr_engine/core/window.h>
 
 namespace vre
 {
@@ -15,14 +14,12 @@ namespace vre
         uint8_t reference_count = 0;
 
         Settings settings      = {};
-        VrRenderer renderer      = {};
-        VrSystem   xr_system     = {};
+        VrSystem xr_system     = {};
         Window   mirror_window = {};
 
         ~Data()
         {
             xr_system.~VrSystem();
-            renderer.~VrRenderer();
             mirror_window.~Window();
         }
     };
@@ -42,14 +39,14 @@ namespace vre
             m_data->xr_system = VrSystem(settings);
 
             // If needed, create mirror window
-            if (settings.mirror_window_settings.enabled) {
+            if (settings.mirror_window_settings.enabled)
+            {
                 m_data->mirror_window = Window(settings);
             }
 
             // Create renderer
             auto window = settings.mirror_window_settings.enabled ? &m_data->mirror_window : nullptr;
-            m_data->renderer = m_data->xr_system.create_renderer( settings, window);
-
+            m_data->xr_system.create_renderer(settings, window);
         }
         catch (const std::exception &e)
         {
@@ -128,7 +125,7 @@ namespace vre
         double   delta_time         = 0.0;
 
         // Register close event
-//        m_data->window.on_close()->subscribe([&should_quit](std::nullptr_t _) { should_quit = true; });
+        //        m_data->window.on_close()->subscribe([&should_quit](std::nullptr_t _) { should_quit = true; });
 
 #ifdef NO_INTERACTIVE
         // In tests, we want a timeout
@@ -148,17 +145,17 @@ namespace vre
         while (!should_quit)
         {
             // Update delta time
-//            delta_time = Window::compute_delta_time(&current_frame_time);
+            //            delta_time = Window::compute_delta_time(&current_frame_time);
 
             // TODO temp
             // Handle events
             should_quit = m_data->mirror_window.handle_events();
 
             // Run rendering
-//            m_data->renderer.draw();
+            //            m_data->renderer.draw();
 
             // Trigger update
-//            m_data->update_event.send(delta_time);
+            //            m_data->update_event.send(delta_time);
         }
     }
 
