@@ -1,4 +1,4 @@
-#include "xr_engine/core/global.h"
+#include "vr_engine/core/global.h"
 
 #include <algorithm>
 #include <iostream>
@@ -6,7 +6,7 @@
 #include <string>
 #endif
 
-namespace xre
+namespace vre
 {
 
     std::ostream &operator<<(std::ostream &os, const Version &version)
@@ -14,4 +14,4 @@ namespace xre
         os << std::to_string(version.major) << "." << std::to_string(version.minor) << "." << std::to_string(version.patch);
         return os;
     }
-} // namespace xre
+} // namespace vre

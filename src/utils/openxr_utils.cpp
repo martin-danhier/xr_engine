@@ -1,9 +1,9 @@
-#include "xr_engine/utils/openxr_utils.h"
+#include "vr_engine/utils/openxr_utils.h"
 
 #include <iostream>
-#include <xr_engine/core/global.h>
+#include <vr_engine/core/global.h>
 
-namespace xre
+namespace vre
 {
     std::string xr_result_to_string(XrResult result)
     {
@@ -41,4 +41,4 @@ namespace xre
                         static_cast<uint8_t>(XR_VERSION_MINOR(version)),
                         static_cast<uint16_t>(XR_VERSION_PATCH(version))};
     }
-} // namespace xre
+} // namespace vre

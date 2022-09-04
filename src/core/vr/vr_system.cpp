@@ -1,17 +1,17 @@
-#include "xr_engine/core/xr/xr_system.h"
+#include "vr_engine/core/vr/vr_system.h"
 
 #include <vector>
-#include <xr_engine/core/global.h>
-#include <xr_engine/core/xr_renderer.h>
-#include <xr_engine/utils/global_utils.h>
-#include <xr_engine/utils/openxr_utils.h>
+#include <vr_engine/core/global.h>
+#include <vr_engine/core/vr_renderer.h>
+#include <vr_engine/utils/global_utils.h>
+#include <vr_engine/utils/openxr_utils.h>
 
 #ifndef _MSC_VER
 // Not used with MSVC
 #include <cstring>
 #endif
 
-namespace xre
+namespace vre
 {
     // ---=== Constants ===---
 
@@ -29,10 +29,10 @@ namespace xre
 
     // --=== Structs ===---
 
-    struct XrSystem::Data
+    struct VrSystem::Data
     {
         uint8_t reference_count = 0;
-        XrRenderer renderer     = {};
+        VrRenderer renderer     = {};
 
         XrInstance instance = XR_NULL_HANDLE;
 #ifdef USE_OPENXR_VALIDATION_LAYERS
@@ -231,7 +231,7 @@ namespace xre
 
     // --=== API ===--
 
-    XrSystem::XrSystem(const Settings &settings) : m_data(new Data)
+    VrSystem::VrSystem(const Settings &settings) : m_data(new Data)
     {
         std::cout << "Using OpenXR, version " << make_version(XR_CURRENT_API_VERSION) << "\n";
 
@@ -256,7 +256,7 @@ namespace xre
 #ifdef USE_OPENXR_VALIDATION_LAYERS
                 XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
 #endif
-                XrRenderer::get_required_openxr_extension(),
+                VrRenderer::get_required_openxr_extension(),
             };
 
             check(check_xr_instance_extension_support(required_extensions), "Not all required OpenXR extensions are supported.");
@@ -352,7 +352,7 @@ namespace xre
         m_data->reference_count = 1;
     }
 
-    XrSystem::XrSystem(const XrSystem &other)
+    VrSystem::VrSystem(const VrSystem &other)
     {
         m_data = other.m_data;
 
@@ -360,7 +360,7 @@ namespace xre
         m_data->reference_count++;
     }
 
-    XrSystem::XrSystem(XrSystem &&other) noexcept
+    VrSystem::VrSystem(VrSystem &&other) noexcept
     {
         m_data = other.m_data;
 
@@ -368,7 +368,7 @@ namespace xre
         other.m_data = nullptr;
     }
 
-    XrSystem &XrSystem::operator=(const XrSystem &other)
+    VrSystem &VrSystem::operator=(const VrSystem &other)
     {
         if (this == &other)
         {
@@ -376,7 +376,7 @@ namespace xre
         }
 
         // Decrement reference count
-        this->~XrSystem();
+        this->~VrSystem();
 
         // Copy data
         m_data = other.m_data;
@@ -385,7 +385,7 @@ namespace xre
         return *this;
     }
 
-    XrSystem &XrSystem::operator=(XrSystem &&other) noexcept
+    VrSystem &VrSystem::operator=(VrSystem &&other) noexcept
     {
         if (this == &other)
         {
@@ -393,7 +393,7 @@ namespace xre
         }
 
         // Decrement reference count
-        this->~XrSystem();
+        this->~VrSystem();
 
         // Take the other's data
         m_data       = other.m_data;
@@ -402,7 +402,7 @@ namespace xre
         return *this;
     }
 
-    XrSystem::~XrSystem()
+    VrSystem::~VrSystem()
     {
         if (m_data)
         {
@@ -440,24 +440,24 @@ namespace xre
 
     // region Friend API
 
-    XrInstance XrSystem::instance() const
+    XrInstance VrSystem::instance() const
     {
         return m_data->instance;
     }
 
-    XrSystemId XrSystem::system_id() const
+    XrSystemId VrSystem::system_id() const
     {
         return m_data->system_id;
     }
 
-    XrRenderer XrSystem::create_renderer(const Settings &settings, Window *mirror_window)
+    VrRenderer VrSystem::create_renderer(const Settings &settings, Window *mirror_window)
     {
         check(!m_data->renderer.is_valid(), "Renderer already created");
         m_data->renderer = {*this, settings, mirror_window};
         return m_data->renderer;
     }
 
-    void XrSystem::finish_setup(void *graphics_binding) const
+    void VrSystem::finish_setup(void *graphics_binding) const
     {
         // Create session
         {
@@ -489,7 +489,9 @@ namespace xre
             xr_check(xrCreateReferenceSpace(m_data->session, &ref_space_info, &m_data->reference_space),
                      "Failed to create reference space");
         }
+
+
     }
 
     // endregion
-} // namespace xre
+} // namespace vre

@@ -1,16 +1,16 @@
 #ifdef WINDOW_SDL2
 
-#include "xr_engine/core/window.h"
+#include "vr_engine/core/window.h"
 
 #include <vector>
 #include <SDL2/SDL.h>
-#include <xr_engine/core/global.h>
+#include <vr_engine/core/global.h>
 
 #ifdef RENDERER_VULKAN
 #include <SDL2/SDL_vulkan.h>
 #endif
 
-namespace xre
+namespace vre
 {
     // ---=== Structs ===---
 
@@ -222,6 +222,6 @@ namespace xre
 
 
 
-} // namespace xre
+} // namespace vre
 
 #endif

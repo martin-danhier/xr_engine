@@ -1,6 +1,6 @@
 #pragma once
 
-namespace xre
+namespace vre
 {
     struct Settings;
 
@@ -23,4 +23,4 @@ namespace xre
 
     };
 
-} // namespace xre
+} // namespace vre

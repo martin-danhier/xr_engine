@@ -4,15 +4,15 @@
 #pragma ide diagnostic   ignored "performance-unnecessary-copy-initialization"
 
 #include <test_framework/test_framework.hpp>
-#include <xr_engine/core/global.h>
-#include <xr_engine/core/window.h>
+#include <vr_engine/core/global.h>
+#include <vr_engine/core/window.h>
 
 TEST
 {
-    xre::Window window;
+    vre::Window window;
 
-    xre::Settings settings {
-        xre::ApplicationInfo {
+    vre::Settings settings {
+        vre::ApplicationInfo {
             "Test Application",
             {0, 1, 0},
         },
@@ -21,16 +21,16 @@ TEST
         },
     };
 
-    ASSERT_NO_THROWS(window = xre::Window(settings));
+    ASSERT_NO_THROWS(window = vre::Window(settings));
 
-    xre::Window window_copy = window;
+    vre::Window window_copy = window;
 
     // It is a shared pointer, so both are valid
     EXPECT_TRUE(window.is_valid());
     EXPECT_TRUE(window_copy.is_valid());
 
     {
-        xre::Window window_copy2 = window_copy;
+        vre::Window window_copy2 = window_copy;
         EXPECT_TRUE(window_copy2.is_valid());
         EXPECT_TRUE(window_copy.is_valid());
         EXPECT_TRUE(window.is_valid());
@@ -39,7 +39,7 @@ TEST
     EXPECT_TRUE(window.is_valid());
     EXPECT_TRUE(window_copy.is_valid());
 
-    xre::Window new_window = std::move(window);
+    vre::Window new_window = std::move(window);
 
     EXPECT_FALSE(window.is_valid());
     EXPECT_TRUE(new_window.is_valid());

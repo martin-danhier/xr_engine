@@ -3,7 +3,7 @@
 #include <string>
 #include <openxr/openxr.h>
 
-namespace xre {
+namespace vre {
     struct Version;
 
     void xr_check(XrResult result, const std::string &error_message = "");

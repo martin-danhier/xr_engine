@@ -1,12 +1,12 @@
-#include "xr_engine/core/engine.h"
+#include "vr_engine/core/engine.h"
 
 #include <algorithm>
-#include <xr_engine/core/global.h>
-#include <xr_engine/core/xr_renderer.h>
-#include <xr_engine/core/window.h>
-#include <xr_engine/core/xr/xr_system.h>
+#include <vr_engine/core/global.h>
+#include <vr_engine/core/vr_renderer.h>
+#include <vr_engine/core/window.h>
+#include <vr_engine/core/vr/vr_system.h>
 
-namespace xre
+namespace vre
 {
     // --=== Structs ===---
 
@@ -15,14 +15,14 @@ namespace xre
         uint8_t reference_count = 0;
 
         Settings settings      = {};
-        XrRenderer renderer      = {};
-        XrSystem xr_system     = {};
+        VrRenderer renderer      = {};
+        VrSystem   xr_system     = {};
         Window   mirror_window = {};
 
         ~Data()
         {
-            xr_system.~XrSystem();
-            renderer.~XrRenderer();
+            xr_system.~VrSystem();
+            renderer.~VrRenderer();
             mirror_window.~Window();
         }
     };
@@ -39,7 +39,7 @@ namespace xre
         try
         {
             // Create XR system
-            m_data->xr_system = XrSystem(settings);
+            m_data->xr_system = VrSystem(settings);
 
             // If needed, create mirror window
             if (settings.mirror_window_settings.enabled) {
@@ -162,4 +162,4 @@ namespace xre
         }
     }
 
-} // namespace xre
+} // namespace vre

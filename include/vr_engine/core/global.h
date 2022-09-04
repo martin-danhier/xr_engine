@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <iostream>
 
-namespace xre
+namespace vre
 {
 
     // ---=== Settings ===---
@@ -11,7 +11,7 @@ namespace xre
 #define ENGINE_NAME "XR_Engine"
 
 #define ENGINE_VERSION \
-    xre::Version       \
+    vre::Version       \
     {                  \
         0, 1, 0        \
     }
@@ -71,4 +71,4 @@ namespace xre
     };
 #endif
 
-} // namespace xre
+} // namespace vre

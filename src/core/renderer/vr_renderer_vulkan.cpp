@@ -1,12 +1,12 @@
 #ifdef RENDERER_VULKAN
-#include "xr_engine/core/xr_renderer.h"
+#include "vr_engine/core/vr_renderer.h"
 
 #include <volk.h>
-#include <xr_engine/core/global.h>
-#include <xr_engine/core/window.h>
-#include <xr_engine/core/xr/xr_system.h>
-#include <xr_engine/utils/global_utils.h>
-#include <xr_engine/utils/openxr_utils.h>
+#include <vr_engine/core/global.h>
+#include <vr_engine/core/window.h>
+#include <vr_engine/core/vr/vr_system.h>
+#include <vr_engine/utils/global_utils.h>
+#include <vr_engine/utils/openxr_utils.h>
 
 // Needs to be after volk.h
 #include <openxr/openxr_platform.h>
@@ -19,7 +19,7 @@
 #error "Vulkan SDK 1.3 is required"
 #endif
 
-namespace xre
+namespace vre
 {
     // --=== Function pointers ===--
 
@@ -89,16 +89,23 @@ namespace xre
     };
     // endregion
 
+    struct VrRenderTarget
+    {
+        XrViewConfigurationView view_config  = {};
+        XrView                  view         = {};
+        XrSwapchain             xr_swapchain = XR_NULL_HANDLE;
+    };
+
     struct Queue
     {
         uint32_t family_index = 0;
         VkQueue  queue        = VK_NULL_HANDLE;
     };
 
-    struct XrRenderer::Data
+    struct VrRenderer::Data
     {
         uint8_t  reference_count = 0;
-        XrSystem xr_system       = {};
+        VrSystem xr_system       = {};
         Window   mirror_window   = {};
 
         // Vulkan core
@@ -116,9 +123,8 @@ namespace xre
         Queue transfer_queue = {};
 
         // XR
-        XrGraphicsBindingVulkan2KHR graphics_binding = {};
-        std::vector<XrViewConfigurationView> view_configurations;
-        std::vector<XrView>                  views;
+        XrGraphicsBindingVulkan2KHR          graphics_binding = {};
+        std::vector<VrRenderTarget>          render_targets   = {};
 
         // --- Methods ---
         template<typename T>
@@ -595,7 +601,7 @@ namespace xre
     }
 
     template<typename T>
-    void XrRenderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset)
+    void VrRenderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset)
     {
         // Copy the data to the GPU
         char *data = static_cast<char *>(allocator.map_buffer(dst));
@@ -610,7 +616,7 @@ namespace xre
         allocator.unmap_buffer(dst);
     }
 
-    size_t XrRenderer::Data::pad_uniform_buffer_size(size_t original_size) const
+    size_t VrRenderer::Data::pad_uniform_buffer_size(size_t original_size) const
     {
         // Get the alignment requirement
         const size_t &min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
@@ -628,7 +634,7 @@ namespace xre
 
     // region Init and shared pointer logic
 
-    XrRenderer::XrRenderer(const XrSystem &parent, const Settings &settings, Window *mirror_window) : m_data(new Data)
+    VrRenderer::VrRenderer(const VrSystem &parent, const Settings &settings, Window *mirror_window) : m_data(new Data)
     {
         check(parent.is_valid(), "Invalid XrSystem. Unable to create XrRenderer");
 
@@ -981,7 +987,7 @@ namespace xre
         parent.finish_setup(&m_data->graphics_binding);
     }
 
-    XrRenderer::XrRenderer(const XrRenderer &other)
+    VrRenderer::VrRenderer(const VrRenderer &other)
     {
         // Copy data
         m_data = other.m_data;
@@ -990,7 +996,7 @@ namespace xre
         m_data->reference_count++;
     }
 
-    XrRenderer::XrRenderer(XrRenderer &&other) noexcept
+    VrRenderer::VrRenderer(VrRenderer &&other) noexcept
     {
         // Move data
         m_data = other.m_data;
@@ -999,7 +1005,7 @@ namespace xre
         other.m_data = nullptr;
     }
 
-    XrRenderer &XrRenderer::operator=(const XrRenderer &other)
+    VrRenderer &VrRenderer::operator=(const VrRenderer &other)
     {
         if (this == &other)
         {
@@ -1007,7 +1013,7 @@ namespace xre
         }
 
         // Call destructor
-        this->~XrRenderer();
+        this->~VrRenderer();
 
         // Copy data
         m_data = other.m_data;
@@ -1016,7 +1022,7 @@ namespace xre
         return *this;
     }
 
-    XrRenderer &XrRenderer::operator=(XrRenderer &&other) noexcept
+    VrRenderer &VrRenderer::operator=(VrRenderer &&other) noexcept
     {
         if (this == &other)
         {
@@ -1024,7 +1030,7 @@ namespace xre
         }
 
         // Call destructor
-        this->~XrRenderer();
+        this->~VrRenderer();
 
         // Move data
         m_data       = other.m_data;
@@ -1033,7 +1039,7 @@ namespace xre
         return *this;
     }
 
-    XrRenderer::~XrRenderer()
+    VrRenderer::~VrRenderer()
     {
         if (m_data)
         {
@@ -1045,7 +1051,7 @@ namespace xre
                 vk_check(vkDeviceWaitIdle(m_data->device), "Failed to wait for device to become idle");
 
                 // Destroy XR system, so that it releases its Vulkan resources
-                m_data->xr_system.~XrSystem();
+                m_data->xr_system.~VrSystem();
                 m_data->xr_system = {};
 
                 // Destroy allocator
@@ -1069,12 +1075,12 @@ namespace xre
 
     // region OpenXR API
 
-    const char *XrRenderer::get_required_openxr_extension()
+    const char *VrRenderer::get_required_openxr_extension()
     {
         return XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
     }
 
-    void *XrRenderer::graphics_binding() const
+    void *VrRenderer::graphics_binding() const
     {
         check(m_data, "Invalid renderer");
         return &m_data->graphics_binding;
@@ -1082,5 +1088,5 @@ namespace xre
 
     // endregion
 
-} // namespace xre
+} // namespace vre
 #endif

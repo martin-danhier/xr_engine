@@ -1,7 +1,7 @@
 # Config inspired by https://github.com/krux02/minimal_cmake_example
 
 cmake_minimum_required(VERSION 3.16)
-project(xr_engine)
+project(vr_engine)
 
 ##################################################################
 ###                          SETTINGS                          ###
@@ -46,18 +46,18 @@ endif ()
 ##################################################################
 
 # Add source files for main lib
-set(xr_engine_lib_sources
+set(vr_engine_lib_sources
         src/core/engine.cpp
-        src/core/xr/xr_system.cpp
+        src/core/vr/vr_system.cpp
         src/core/global.cpp
-        src/core/renderer/xr_renderer_vulkan.cpp
+        src/core/renderer/vr_renderer_vulkan.cpp
         src/core/window/window_sdl2.cpp
         src/utils/global_utils.cpp
         src/utils/openxr_utils.cpp
         )
 
 # Add header directories for main lib
-set(xr_engine_lib_header_dir
+set(vr_engine_lib_header_dir
         include
         )
 
@@ -168,9 +168,9 @@ endif ()
 ##################################################################
 
 # Create main lib
-add_library(xr_engine_lib STATIC ${xr_engine_lib_sources})
-target_sources(xr_engine_lib PRIVATE ${xr_engine_lib_sources})
-target_include_directories(xr_engine_lib PUBLIC ${xr_engine_lib_header_dir})
+add_library(vr_engine_lib STATIC ${vr_engine_lib_sources})
+target_sources(vr_engine_lib PRIVATE ${vr_engine_lib_sources})
+target_include_directories(vr_engine_lib PUBLIC ${vr_engine_lib_header_dir})
 
 ##################################################################
 ###                         DEPENDENCIES                       ###
@@ -188,12 +188,12 @@ add_subdirectory(external)
 if (${interactive} STREQUAL "0")
     # Link pthread on linux
     if (UNIX)
-        target_link_libraries(xr_engine_lib PUBLIC pthread)
+        target_link_libraries(vr_engine_lib PUBLIC pthread)
     endif ()
 endif ()
 
 if (DEFINED RENDERER_VULKAN)
-    target_link_libraries(xr_engine_lib PUBLIC
+    target_link_libraries(vr_engine_lib PUBLIC
             Vulkan::Vulkan
             volk
             vma
@@ -201,12 +201,12 @@ if (DEFINED RENDERER_VULKAN)
 endif ()
 
 if (DEFINED WINDOW_SDL2)
-    target_link_libraries(xr_engine_lib PUBLIC
+    target_link_libraries(vr_engine_lib PUBLIC
             sdl2
             )
 endif ()
 
-target_link_libraries(xr_engine_lib PUBLIC
+target_link_libraries(vr_engine_lib PUBLIC
         openxr
         )
 
@@ -244,7 +244,7 @@ macro(add_unit_test)
             )
 
     # Link project lib and testing framework
-    target_link_libraries(${TEST_NAME} xr_engine_lib testing_framework)
+    target_link_libraries(${TEST_NAME} vr_engine_lib testing_framework)
 
     # Register test
     add_test(NAME ${TEST_NAME}
@@ -338,5 +338,5 @@ if (DEFINED RENDERER_VULKAN)
 
     # Link it to the main lib
     add_custom_target(shaders DEPENDS ${spirv_binary_files})
-    add_dependencies(xr_engine_lib shaders)
+    add_dependencies(vr_engine_lib shaders)
 endif ()

@@ -1,9 +1,9 @@
-#include "xr_engine/core/engine.h"
+#include "vr_engine/core/engine.h"
 
 #include <test_framework/test_framework.hpp>
-#include <xr_engine/core/global.h>
+#include <vr_engine/core/global.h>
 
-using namespace xre;
+using namespace vre;
 
 TEST
 {

@@ -19,7 +19,7 @@ Ideas for better name are welcome.
 
 ## Enable OpenXR validation layers
 
-To enable validation layers, add the following environment variable:
+To enable OpenXR validation layers, add the following environment variable:
 
 ``XR_API_LAYER_PATH=<build_directory>/external/OpenXR-SDK-Source/src/api_layers``
 

@@ -8,8 +8,8 @@ import gdb.printing as printing
 # ====== Register printers ======
 
 def build_pretty_printer():
-    pp = printing.RegexpCollectionPrettyPrinter("xre")
+    pp = printing.RegexpCollectionPrettyPrinter("vre")
     return pp
 
-print("Registering pretty printers for xr_engine")
+print("Registering pretty printers for vr_engine")
 printing.register_pretty_printer(None, build_pretty_printer())

@@ -1,17 +1,18 @@
 #pragma once
 
-#include "xr_engine/core/xr_renderer.h"
+#include "vr_engine/core/vr_renderer.h"
+
 #include <cstdint>
 
 // OpenXR forward declarations
 typedef struct XrInstance_T *XrInstance;
 typedef uint64_t XrSystemId;
 
-namespace xre
+namespace vre
 {
     struct Settings;
-    class XrRenderer;
-    class XrSystem
+    class VrRenderer;
+    class VrSystem
     {
       private:
         struct Data;
@@ -19,21 +20,21 @@ namespace xre
 
       public:
         // Shared pointer logic
-        XrSystem() = default;
-        explicit XrSystem(const Settings &settings);
-        XrSystem(const XrSystem &other);
-        XrSystem(XrSystem &&other) noexcept;
-        XrSystem &operator=(const XrSystem &other);
-        XrSystem &operator=(XrSystem &&other) noexcept;
+        VrSystem() = default;
+        explicit VrSystem(const Settings &settings);
+        VrSystem(const VrSystem &other);
+        VrSystem(VrSystem &&other) noexcept;
+        VrSystem                 &operator=(const VrSystem &other);
+        VrSystem                 &operator=(VrSystem &&other) noexcept;
         [[nodiscard]] inline bool is_valid() const {
             return m_data != nullptr;
         }
 
-        XrRenderer create_renderer(const Settings &settings, Window *mirror_window = nullptr);
+        VrRenderer create_renderer(const Settings &settings, Window *mirror_window = nullptr);
 
-        ~XrSystem();
+        ~VrSystem();
       private:
-        friend XrRenderer;
+        friend VrRenderer;
 
         [[nodiscard]] XrInstance instance() const;
         [[nodiscard]] XrSystemId system_id() const;
@@ -42,4 +43,4 @@ namespace xre
 
     };
 
-} // namespace xre
+} // namespace vre

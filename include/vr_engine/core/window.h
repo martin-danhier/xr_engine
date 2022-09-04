@@ -9,7 +9,7 @@ typedef struct VkInstance_T   *VkInstance;
 typedef struct VkSurfaceKHR_T *VkSurfaceKHR;
 #endif
 
-namespace xre
+namespace vre
 {
     struct Settings;
 
@@ -47,4 +47,4 @@ namespace xre
         void get_required_vulkan_extensions(std::vector<const char *> &out_extensions) const;
 #endif
     };
-} // namespace xre
+} // namespace vre

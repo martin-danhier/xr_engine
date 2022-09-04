@@ -1,12 +1,12 @@
 #pragma once
 
-namespace xre
+namespace vre
 {
     struct Settings;
-    class XrSystem;
+    class VrSystem;
     class Window;
 
-    struct XrRenderer
+    struct VrRenderer
     {
       private:
         struct Data;
@@ -15,23 +15,23 @@ namespace xre
       public:
         // Shared pointer logic
 
-        XrRenderer() = default;
-        XrRenderer(const XrRenderer &other);
-        XrRenderer(XrRenderer &&other) noexcept;
-        XrRenderer &operator=(const XrRenderer &other);
-        XrRenderer &operator=(XrRenderer &&other) noexcept;
+        VrRenderer() = default;
+        VrRenderer(const VrRenderer &other);
+        VrRenderer(VrRenderer &&other) noexcept;
+        VrRenderer               &operator=(const VrRenderer &other);
+        VrRenderer               &operator=(VrRenderer &&other) noexcept;
         [[nodiscard]] inline bool is_valid() const {
             return m_data != nullptr;
         }
 
-        ~XrRenderer();
+        ~VrRenderer();
 
       private:
         // OpenXR API: methods used by other OpenXR classes, but not exposed to the user
-        friend XrSystem;
+        friend VrSystem;
 
         /** Create a new renderer */
-        XrRenderer(const XrSystem &parent, const Settings &settings, Window *mirror_window = nullptr);
+        VrRenderer(const VrSystem &parent, const Settings &settings, Window *mirror_window = nullptr);
 
         /** Returns the name of the extension required for the binding. */
         static const char *get_required_openxr_extension();
@@ -39,4 +39,4 @@ namespace xre
         [[nodiscard]] void *graphics_binding() const;
     };
 
-} // namespace xre
+} // namespace vre

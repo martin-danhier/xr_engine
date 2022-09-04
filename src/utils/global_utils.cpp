@@ -1,6 +1,6 @@
-#include "xr_engine/utils/global_utils.h"
+#include "vr_engine/utils/global_utils.h"
 
-namespace xre {
+namespace vre {
     void check(bool result, const std::string &error_message)
     {
         if (!result)
