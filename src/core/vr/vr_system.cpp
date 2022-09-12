@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <vr_engine/core/global.h>
+#include <vr_engine/core/scene.h>
 #include <vr_engine/core/vr/vr_renderer.h>
 #include <vr_engine/utils/global_utils.h>
 #include <vr_engine/utils/openxr_utils.h>
@@ -15,7 +16,7 @@ namespace vre
 {
     // ---=== Constants ===---
 
-#define FORM_FACTOR             XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY
+#define FORM_FACTOR XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY
 
     constexpr XrPosef XR_POSE_IDENTITY = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
 
@@ -32,6 +33,7 @@ namespace vre
     {
         uint8_t    reference_count = 0;
         VrRenderer renderer        = {};
+        Scene      scene           = {};
 
         XrInstance instance = XR_NULL_HANDLE;
 #ifdef USE_OPENXR_VALIDATION_LAYERS
@@ -230,7 +232,11 @@ namespace vre
 
     // --=== API ===--
 
-    VrSystem::VrSystem(const Settings &settings) : m_data(new Data)
+    VrSystem::VrSystem(const Settings &settings, const Scene &scene)
+        : m_data(new Data {
+            .reference_count = 1,
+            .scene = scene,
+        })
     {
         std::cout << "Using OpenXR, version " << make_version(XR_CURRENT_API_VERSION) << "\n";
 
@@ -346,9 +352,6 @@ namespace vre
                      "Failed to get system properties");
             std::cout << "System name: " << system_properties.systemName << "\n";
         }
-
-        // Init reference count
-        m_data->reference_count = 1;
     }
 
     VrSystem::VrSystem(const VrSystem &other)
@@ -409,7 +412,8 @@ namespace vre
 
             if (m_data->reference_count == 0)
             {
-                if (m_data->renderer.is_valid()) {
+                if (m_data->renderer.is_valid())
+                {
                     m_data->renderer.wait_idle();
                     m_data->renderer.cleanup_vr_views();
                 }
@@ -449,7 +453,7 @@ namespace vre
     void VrSystem::create_renderer(const Settings &settings, Window *mirror_window)
     {
         check(!m_data->renderer.is_valid(), "Renderer already created");
-        m_data->renderer = VrRenderer(m_data->instance, m_data->system_id, settings, mirror_window);
+        m_data->renderer = VrRenderer(m_data->instance, m_data->system_id, settings, m_data->scene, mirror_window);
 
         // Create session
         {

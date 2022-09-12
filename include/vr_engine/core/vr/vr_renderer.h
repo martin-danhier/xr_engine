@@ -3,13 +3,14 @@
 #include <cstdint>
 
 // OpenXR forward declarations
-typedef struct XrSession_T* XrSession;
-typedef struct XrInstance_T* XrInstance;
-typedef uint64_t XrSystemId;
+typedef struct XrSession_T  *XrSession;
+typedef struct XrInstance_T *XrInstance;
+typedef uint64_t             XrSystemId;
 
 namespace vre
 {
     struct Settings;
+    class Scene;
     class VrSystem;
     class Window;
 
@@ -24,14 +25,16 @@ namespace vre
 
         VrRenderer() = default;
         /** Create a new renderer */
-        VrRenderer(XrInstance xr_instance, XrSystemId xr_system_id, const Settings &settings, Window *mirror_window = nullptr);
+        VrRenderer(XrInstance      xr_instance,
+                   XrSystemId      xr_system_id,
+                   const Settings &settings,
+                   const Scene    &scene,
+                   Window         *mirror_window = nullptr);
         VrRenderer(const VrRenderer &other);
         VrRenderer(VrRenderer &&other) noexcept;
         VrRenderer               &operator=(const VrRenderer &other);
         VrRenderer               &operator=(VrRenderer &&other) noexcept;
-        [[nodiscard]] inline bool is_valid() const {
-            return m_data != nullptr;
-        }
+        [[nodiscard]] inline bool is_valid() const { return m_data != nullptr; }
 
         ~VrRenderer();
 

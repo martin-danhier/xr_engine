@@ -11,6 +11,7 @@ namespace vre
     struct Settings;
     class VrRenderer;
     class Window;
+    class Scene;
     class VrSystem
     {
       private:
@@ -20,7 +21,7 @@ namespace vre
       public:
         // Shared pointer logic
         VrSystem() = default;
-        explicit VrSystem(const Settings &settings);
+        explicit VrSystem(const Settings &settings, const Scene &scene);
         VrSystem(const VrSystem &other);
         VrSystem(VrSystem &&other) noexcept;
         VrSystem                 &operator=(const VrSystem &other);

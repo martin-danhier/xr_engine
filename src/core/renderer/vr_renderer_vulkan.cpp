@@ -3,10 +3,12 @@
 
 #include <volk.h>
 #include <vr_engine/core/global.h>
+#include <vr_engine/core/scene.h>
 #include <vr_engine/core/vr/vr_system.h>
 #include <vr_engine/core/window.h>
 #include <vr_engine/utils/global_utils.h>
 #include <vr_engine/utils/openxr_utils.h>
+#include <vr_engine/utils/vulkan_utils.h>
 
 // Needs to be after volk.h
 #include <openxr/openxr_platform.h>
@@ -31,6 +33,7 @@ namespace vre
     // --=== Defines ===--
 
 #define VIEW_CONFIGURATION_TYPE XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
+#define NB_OVERLAPPING_FRAMES   2
 
     // --=== Structs ===---
 
@@ -42,10 +45,7 @@ namespace vre
         VkBuffer      buffer     = VK_NULL_HANDLE;
         uint32_t      size       = 0;
 
-        [[nodiscard]] inline bool is_valid() const
-        {
-            return allocation != VK_NULL_HANDLE;
-        }
+        [[nodiscard]] inline bool is_valid() const { return allocation != VK_NULL_HANDLE; }
     };
 
     struct AllocatedImage
@@ -93,16 +93,30 @@ namespace vre
     };
     // endregion
 
+    // region Material System
+
+    struct ShaderModule
+    {
+        VkShaderModule module = VK_NULL_HANDLE;
+    };
+
+    // endregion
+
+    struct RenderTarget
+    {
+        VkImage       image       = VK_NULL_HANDLE;
+        VkImageView   image_view  = VK_NULL_HANDLE;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    };
+
     /** A VR system has several "views" (typically left and right eyes) that can be rendered to. */
     struct VrView
     {
-        XrViewConfigurationView  view_config           = {};
-        XrView                   view                  = {};
-        XrSwapchain              xr_swapchain          = XR_NULL_HANDLE;
-        VkExtent2D               swapchain_extent      = {};
-        uint32_t                 nb_swapchain_images   = 0;
-        std::vector<VkImage>     swapchain_images      = {};
-        std::vector<VkImageView> swapchain_image_views = {};
+        XrViewConfigurationView   view_config      = {};
+        XrView                    view             = {};
+        XrSwapchain               xr_swapchain     = XR_NULL_HANDLE;
+        VkExtent2D                swapchain_extent = {};
+        std::vector<RenderTarget> render_targets   = {};
     };
 
     struct Queue
@@ -111,10 +125,20 @@ namespace vre
         VkQueue  queue        = VK_NULL_HANDLE;
     };
 
+    struct FrameData
+    {
+        VkCommandPool   command_pool              = VK_NULL_HANDLE;
+        VkCommandBuffer command_buffer            = VK_NULL_HANDLE;
+        VkFence         render_fence              = VK_NULL_HANDLE;
+        VkSemaphore     image_available_semaphore = VK_NULL_HANDLE;
+        VkSemaphore     render_finished_semaphore = VK_NULL_HANDLE;
+    };
+
     struct VrRenderer::Data
     {
         uint8_t reference_count = 0;
         Window  mirror_window   = {};
+        Scene   scene           = {};
 
         // Vulkan core
         VkInstance                 vk_instance       = VK_NULL_HANDLE;
@@ -126,6 +150,10 @@ namespace vre
 #endif
         Allocator allocator           = {};
         VkFormat  xr_swapchain_format = VK_FORMAT_UNDEFINED;
+        // Only one render stage for now
+        VkRenderPass render_pass                   = VK_NULL_HANDLE;
+        FrameData    frames[NB_OVERLAPPING_FRAMES] = {};
+        uint64_t     current_frame_number          = 0;
 
         // Queues
         Queue graphics_queue = {};
@@ -149,19 +177,6 @@ namespace vre
     {
         // region Checks and string conversions
 
-        std::string vk_result_to_string(VkResult result)
-        {
-            switch (result)
-            {
-                case VK_SUCCESS: return "VK_SUCCESS";
-                case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-                case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
-                case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
-                case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
-                case VK_TIMEOUT: return "VK_TIMEOUT";
-                default: return std::to_string(result);
-            }
-        }
 
         std::string vk_present_mode_to_string(VkPresentModeKHR present_mode)
         {
@@ -172,27 +187,6 @@ namespace vre
                 case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
                 case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO Relaxed";
                 default: return std::to_string(present_mode);
-            }
-        }
-
-        void vk_check(VkResult result, const std::string &error_message = "")
-        {
-            // Warnings
-            if (result == VK_SUBOPTIMAL_KHR)
-            {
-                std::cout << "[Vulkan Warning] A Vulkan function call returned VkResult = " << vk_result_to_string(result) << "\n";
-            }
-            // Errors
-            else if (result != VK_SUCCESS)
-            {
-                // Pretty print error
-                std::cerr << "[Vulkan Error] A Vulkan function call returned VkResult = " << vk_result_to_string(result) << "\n";
-
-                // Optional custom error message precision
-                if (!error_message.empty())
-                {
-                    std::cerr << "Precision: " << error_message << "\n";
-                }
             }
         }
 
@@ -367,7 +361,7 @@ namespace vre
 
         // region Views
 
-        VkFormat choose_swapchain_format(XrSession session)
+        VkFormat choose_xr_swapchain_format(XrSession session)
         {
             // Get the list of available formats
             uint32_t nb_available_formats = 0;
@@ -681,7 +675,11 @@ namespace vre
 
     // region Init and shared pointer logic
 
-    VrRenderer::VrRenderer(XrInstance xr_instance, XrSystemId xr_system_id, const Settings &settings, Window *mirror_window)
+    VrRenderer::VrRenderer(XrInstance      xr_instance,
+                           XrSystemId      xr_system_id,
+                           const Settings &settings,
+                           const Scene    &scene,
+                           Window         *mirror_window)
         : m_data(new Data)
     {
         m_data->reference_count = 1;
@@ -690,6 +688,7 @@ namespace vre
             m_data->mirror_window = *mirror_window;
         }
 
+        m_data->scene       = scene;
         m_data->xr_instance = xr_instance;
         m_data->system_id   = xr_system_id;
 
@@ -1028,6 +1027,73 @@ namespace vre
             .queueFamilyIndex = m_data->graphics_queue.family_index,
             .queueIndex       = 0,
         };
+
+        // --=== Init frames ===--
+
+        // region Init frames
+
+        {
+            // Define create infos
+            VkCommandPoolCreateInfo command_pool_create_info = {
+                .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                .pNext            = VK_NULL_HANDLE,
+                .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                .queueFamilyIndex = m_data->graphics_queue.family_index,
+            };
+
+            VkFenceCreateInfo fence_create_info = {
+                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .pNext = VK_NULL_HANDLE,
+                .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+            };
+
+            VkSemaphoreCreateInfo semaphore_create_info = {
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                .pNext = VK_NULL_HANDLE,
+                .flags = 0,
+            };
+
+            // For each frame
+            for (auto &frame : m_data->frames)
+            {
+                // Create command pool
+                vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &frame.command_pool),
+                         "Couldn't create command pool");
+
+                // Create command buffers
+                VkCommandBufferAllocateInfo command_buffer_allocate_info = {
+                    .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                    .pNext              = VK_NULL_HANDLE,
+                    .commandPool        = frame.command_pool,
+                    .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                    .commandBufferCount = 1,
+                };
+                vk_check(vkAllocateCommandBuffers(m_data->device, &command_buffer_allocate_info, &frame.command_buffer),
+                         "Couldn't allocate command buffer");
+
+                // Create fence
+                vk_check(vkCreateFence(m_data->device, &fence_create_info, nullptr, &frame.render_fence), "Couldn't create fence");
+
+                // Create semaphores
+                vk_check(vkCreateSemaphore(m_data->device, &semaphore_create_info, nullptr, &frame.image_available_semaphore),
+                         "Couldn't create image available semaphore");
+                vk_check(vkCreateSemaphore(m_data->device, &semaphore_create_info, nullptr, &frame.render_finished_semaphore),
+                         "Couldn't create render semaphore");
+            }
+        }
+
+        // endregion
+
+        // --=== Scene ===--
+
+        m_data->scene.bind_renderer(SceneRendererBinding {
+            .device = m_data->device,
+            .functions =
+                {
+                    .vkCreateShaderModule = vkCreateShaderModule,
+                    .vkDestroyShaderModule = vkDestroyShaderModule,
+                },
+        });
     }
 
     VrRenderer::VrRenderer(const VrRenderer &other)
@@ -1090,6 +1156,18 @@ namespace vre
 
             if (m_data->reference_count == 0)
             {
+                for (auto &frame : m_data->frames)
+                {
+                    vkDestroySemaphore(m_data->device, frame.image_available_semaphore, nullptr);
+                    vkDestroySemaphore(m_data->device, frame.render_finished_semaphore, nullptr);
+                    vkDestroyFence(m_data->device, frame.render_fence, nullptr);
+                    vkFreeCommandBuffers(m_data->device, frame.command_pool, 1, &frame.command_buffer);
+                    vkDestroyCommandPool(m_data->device, frame.command_pool, nullptr);
+                }
+
+                // Destroy render pass
+                vkDestroyRenderPass(m_data->device, m_data->render_pass, nullptr);
+
                 // Destroy allocator
                 m_data->allocator.~Allocator();
 
@@ -1125,100 +1203,170 @@ namespace vre
     void VrRenderer::init_vr_views(XrSession session) const
     {
         // Choose swapchain format
-        m_data->xr_swapchain_format = choose_swapchain_format(session);
+        m_data->xr_swapchain_format = choose_xr_swapchain_format(session);
 
-        // List available views
-        uint32_t nb_views = 0;
-        xr_check(
-            xrEnumerateViewConfigurationViews(m_data->xr_instance, m_data->system_id, VIEW_CONFIGURATION_TYPE, 0, &nb_views, nullptr));
-        std::vector<XrViewConfigurationView> view_configs(nb_views, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
-        xr_check(xrEnumerateViewConfigurationViews(m_data->xr_instance,
-                                                   m_data->system_id,
-                                                   VIEW_CONFIGURATION_TYPE,
-                                                   nb_views,
-                                                   &nb_views,
-                                                   view_configs.data()));
+        // --=== Render pass ===--
 
-        // Init view array
-        m_data->views.reserve(nb_views);
-
-        // Init create infos that can be reused
-        XrSwapchainCreateInfo swapchain_create_info {
-            .type        = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-            .next        = nullptr,
-            .createFlags = 0,
-            .usageFlags  = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-            .format      = m_data->xr_swapchain_format,
-            .faceCount   = 1, // Not a cube map, 1 face
-            .arraySize   = 1, // Not an array texture, 1 layer
-            .mipCount    = 1, // No mipmaps
-        };
-
-        VkImageViewCreateInfo image_view_create_info {
-            .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext    = nullptr,
-            .flags    = 0,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format   = m_data->xr_swapchain_format,
-            .components =
-                {
-                    .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-                },
-            .subresourceRange =
-                {
-                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel   = 0,
-                    .levelCount     = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount     = 1,
-                },
-        };
-
-        for (uint32_t view_i = 0; view_i < nb_views; view_i++)
+        // region Init render pass
         {
-            VrView view = {
-                .view_config = view_configs[view_i],
-                .view        = {XR_TYPE_VIEW},
+            VkAttachmentDescription attachments[] = {
+                // Color attachment for XR views
+                {
+                    .format         = m_data->xr_swapchain_format,
+                    .samples        = VK_SAMPLE_COUNT_1_BIT,
+                    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+                    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                },
             };
-            view.swapchain_extent = {view.view_config.recommendedImageRectWidth, view.view_config.recommendedImageRectHeight};
 
-            // Update create info for this view
-            swapchain_create_info.width       = view.swapchain_extent.width;
-            swapchain_create_info.height      = view.swapchain_extent.height;
-            swapchain_create_info.sampleCount = view.view_config.recommendedSwapchainSampleCount;
+            VkAttachmentReference color_ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
-            // Create swapchain
-            xr_check(xrCreateSwapchain(session, &swapchain_create_info, &view.xr_swapchain), "Failed to create OpenXR swapchain");
-
-            // Get swapchain images
-            view.nb_swapchain_images = 0;
-            xr_check(xrEnumerateSwapchainImages(view.xr_swapchain, 0, &view.nb_swapchain_images, nullptr));
-            std::vector<XrSwapchainImageVulkan2KHR> xr_images(view.nb_swapchain_images, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
-            xr_check(xrEnumerateSwapchainImages(view.xr_swapchain,
-                                                view.nb_swapchain_images,
-                                                &view.nb_swapchain_images,
-                                                reinterpret_cast<XrSwapchainImageBaseHeader *>(xr_images.data())));
-
-            // Get Vulkan images and views
-            view.swapchain_images.reserve(view.nb_swapchain_images);
-            view.swapchain_image_views.reserve(view.nb_swapchain_images);
-            for (auto image : xr_images)
-            {
-                view.swapchain_images.push_back(image.image);
-
-                image_view_create_info.image = image.image;
-                VkImageView image_view;
-                vk_check(vkCreateImageView(m_data->device, &image_view_create_info, nullptr, &image_view),
-                         "Failed to create Vulkan image view for swapchain image");
-                view.swapchain_image_views.push_back(image_view);
-            }
-
-            // Save
-            m_data->views.push_back(view);
+            // Create subpass and render pass
+            auto subpass_description = VkSubpassDescription {
+                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                // Color attachments
+                .colorAttachmentCount = 1,
+                .pColorAttachments    = &color_ref,
+                // Depth attachment
+                .pDepthStencilAttachment = VK_NULL_HANDLE,
+            };
+            VkRenderPassCreateInfo render_pass_create_info {
+                .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                .pNext           = nullptr,
+                .attachmentCount = 1,
+                .pAttachments    = attachments,
+                .subpassCount    = 1,
+                .pSubpasses      = &subpass_description,
+            };
+            vk_check(vkCreateRenderPass(m_data->device, &render_pass_create_info, nullptr, &m_data->render_pass),
+                     "Failed to create Vulkan render pass");
         }
+        // endregion
+
+        // --=== Views and swapchains ===--
+
+        // region Views and swapchains
+        {
+            // List available views
+            uint32_t nb_views = 0;
+            xr_check(xrEnumerateViewConfigurationViews(m_data->xr_instance,
+                                                       m_data->system_id,
+                                                       VIEW_CONFIGURATION_TYPE,
+                                                       0,
+                                                       &nb_views,
+                                                       nullptr));
+            std::vector<XrViewConfigurationView> view_configs(nb_views, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+            xr_check(xrEnumerateViewConfigurationViews(m_data->xr_instance,
+                                                       m_data->system_id,
+                                                       VIEW_CONFIGURATION_TYPE,
+                                                       nb_views,
+                                                       &nb_views,
+                                                       view_configs.data()));
+
+            // Init view array
+            m_data->views.reserve(nb_views);
+
+            // Init create infos that can be reused
+            XrSwapchainCreateInfo swapchain_create_info {
+                .type        = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+                .next        = nullptr,
+                .createFlags = 0,
+                .usageFlags  = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+                .format      = m_data->xr_swapchain_format,
+                .faceCount   = 1, // Not a cube map, 1 face
+                .arraySize   = 1, // Not an array texture, 1 layer
+                .mipCount    = 1, // No mipmaps
+            };
+
+            VkImageViewCreateInfo image_view_create_info {
+                .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .pNext    = nullptr,
+                .flags    = 0,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format   = m_data->xr_swapchain_format,
+                .components =
+                    {
+                        .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                        .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                        .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                        .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    },
+                .subresourceRange =
+                    {
+                        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel   = 0,
+                        .levelCount     = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount     = 1,
+                    },
+            };
+
+            VkFramebufferCreateInfo framebuffer_create_info {
+                .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .pNext           = nullptr,
+                .flags           = 0,
+                .renderPass      = m_data->render_pass,
+                .attachmentCount = 1,
+                .layers          = 1,
+            };
+
+            for (uint32_t view_i = 0; view_i < nb_views; view_i++)
+            {
+                VrView view = {
+                    .view_config = view_configs[view_i],
+                    .view        = {XR_TYPE_VIEW},
+                };
+                view.swapchain_extent = {view.view_config.recommendedImageRectWidth, view.view_config.recommendedImageRectHeight};
+
+                // Update create info for this view
+                swapchain_create_info.width       = view.swapchain_extent.width;
+                swapchain_create_info.height      = view.swapchain_extent.height;
+                swapchain_create_info.sampleCount = view.view_config.recommendedSwapchainSampleCount;
+
+                // Create swapchain
+                xr_check(xrCreateSwapchain(session, &swapchain_create_info, &view.xr_swapchain), "Failed to create OpenXR swapchain");
+
+                // Get swapchain images
+                uint32_t nb_swapchain_images = 0;
+                xr_check(xrEnumerateSwapchainImages(view.xr_swapchain, 0, &nb_swapchain_images, nullptr));
+                std::vector<XrSwapchainImageVulkan2KHR> xr_images(nb_swapchain_images, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+                xr_check(xrEnumerateSwapchainImages(view.xr_swapchain,
+                                                    nb_swapchain_images,
+                                                    &nb_swapchain_images,
+                                                    reinterpret_cast<XrSwapchainImageBaseHeader *>(xr_images.data())));
+
+                // Create render targets
+                view.render_targets.reserve(nb_swapchain_images);
+
+                for (auto image : xr_images)
+                {
+                    RenderTarget render_target {image.image};
+
+                    // Create image view
+                    image_view_create_info.image = render_target.image;
+                    vk_check(vkCreateImageView(m_data->device, &image_view_create_info, nullptr, &render_target.image_view),
+                             "Failed to create Vulkan image view for XR swapchain image");
+
+                    // Create framebuffer
+                    framebuffer_create_info.pAttachments = &render_target.image_view;
+                    framebuffer_create_info.width        = view.swapchain_extent.width;
+                    framebuffer_create_info.height       = view.swapchain_extent.height;
+                    vk_check(vkCreateFramebuffer(m_data->device, &framebuffer_create_info, nullptr, &render_target.framebuffer),
+                             "Failed to create Vulkan framebuffer for XR swapchain image");
+
+                    // Save
+                    view.render_targets.push_back(render_target);
+                }
+
+                // Save
+                m_data->views.push_back(view);
+            }
+        }
+        // endregion
     }
 
     void VrRenderer::wait_idle() const
@@ -1231,17 +1379,19 @@ namespace vre
     {
         for (VrView &view : m_data->views)
         {
-            for (VkImageView image_view : view.swapchain_image_views)
+            for (auto &render_target : view.render_targets)
             {
-                vkDestroyImageView(m_data->device, image_view, nullptr);
+                vkDestroyFramebuffer(m_data->device, render_target.framebuffer, nullptr);
+                vkDestroyImageView(m_data->device, render_target.image_view, nullptr);
             }
+            view.render_targets.clear();
 
             if (view.xr_swapchain)
             {
                 xr_check(xrDestroySwapchain(view.xr_swapchain), "Failed to destroy OpenXR swapchain");
-                view.xr_swapchain = XR_NULL_HANDLE;
             }
         }
+        m_data->views.clear();
     }
 
     // endregion

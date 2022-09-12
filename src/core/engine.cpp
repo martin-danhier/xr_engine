@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <vr_engine/core/global.h>
+#include <vr_engine/core/scene.h>
 #include <vr_engine/core/vr/vr_system.h>
 #include <vr_engine/core/window.h>
 
@@ -15,6 +16,7 @@ namespace vre
 
         Settings settings      = {};
         VrSystem xr_system     = {};
+        Scene    scene         = {};
         Window   mirror_window = {};
 
         ~Data()
@@ -31,12 +33,13 @@ namespace vre
         m_data = new Data {
             .reference_count = 1,
             .settings        = settings,
+            .scene           = Scene::create_scene(),
         };
 
         try
         {
             // Create XR system
-            m_data->xr_system = VrSystem(settings);
+            m_data->xr_system = VrSystem(settings, m_data->scene);
 
             // If needed, create mirror window
             if (settings.mirror_window_settings.enabled)
@@ -47,6 +50,7 @@ namespace vre
             // Create renderer
             auto window = settings.mirror_window_settings.enabled ? &m_data->mirror_window : nullptr;
             m_data->xr_system.create_renderer(settings, window);
+
         }
         catch (const std::exception &e)
         {

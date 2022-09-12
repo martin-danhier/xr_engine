@@ -54,6 +54,11 @@ set(vr_engine_lib_sources
         src/core/window/window_sdl2.cpp
         src/utils/global_utils.cpp
         src/utils/openxr_utils.cpp
+        src/core/renderer/scene_vulkan.cpp
+        src/utils/shared_pointer.cpp
+        src/utils/data/hash_map.cpp
+        src/utils/io.cpp
+        src/utils/vulkan_utils.cpp
         )
 
 # Add header directories for main lib
